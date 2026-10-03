@@ -1,0 +1,46 @@
+import assert from "node:assert/strict";
+const targets = await fetch("http://127.0.0.1:9338/json").then((r) => r.json());
+const target = targets.find((t) => t.type === "page" && t.title === "Gorth Launcher");
+assert(target);
+const ws = new WebSocket(target.webSocketDebuggerUrl);
+await new Promise((resolve) => ws.addEventListener("open", resolve, { once: true }));
+let sequence = 0;
+const pending = new Map(), errors = [];
+ws.addEventListener("message", (event) => {
+  const value = JSON.parse(event.data);
+  if (value.method === "Runtime.exceptionThrown") errors.push(value.params);
+  if (value.id) { pending.get(value.id)?.(value.result); pending.delete(value.id); }
+});
+const send = (method, params = {}) => new Promise((resolve) => { pending.set(++sequence, resolve); ws.send(JSON.stringify({ id: sequence, method, params })); });
+const evaluate = async (expression) => { const result = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }); assert(!result.exceptionDetails, JSON.stringify(result.exceptionDetails)); return result.result?.value; };
+const delay = () => new Promise((resolve) => setTimeout(resolve, 300));
+const click = async (label) => { assert(await evaluate(`(()=>{const button=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===${JSON.stringify(label)});if(!button)return false;button.click();return true})()`)); await delay(); };
+const change = async (selector, value, tag = "HTMLInputElement", event = "input") => { await evaluate(`(()=>{const el=document.querySelector(${JSON.stringify(selector)});Object.getOwnPropertyDescriptor(${tag}.prototype,'value').set.call(el,${JSON.stringify(value)});el.dispatchEvent(new Event(${JSON.stringify(event)},{bubbles:true}));})()`); await delay(); };
+await send("Runtime.enable");
+await click("Tạo instance");
+await change('dialog input[placeholder="Thế giới của tôi"]', "Fabric content smoke");
+await change("dialog select", "Fabric", "HTMLSelectElement", "change");
+assert.equal(await evaluate("[...document.querySelectorAll('dialog select')].at(-1)?.value"), "0.16.14");
+await evaluate("document.querySelector('dialog form').requestSubmit()"); await delay();
+const library = await evaluate("window.electronAPI.library.snapshot()");
+const instance = library.instances.find((item) => item.name === "Fabric content smoke");
+assert.equal(instance.loader, "Fabric"); assert.equal(instance.loaderVersion, "0.16.14");
+await click("Mod & modpack");
+assert(await evaluate("document.body.innerText.includes('CURSEFORGE_API_KEY')"));
+const query = { provider: "modrinth", kind: "mod", query: "fabric-api", version: "1.20.1", loader: "Fabric", offset: 0 };
+const search = await evaluate(`window.electronAPI.content.search(${JSON.stringify(query)})`);
+assert(search.ok, search.error); assert(search.data.projects.length);
+const project = search.data.projects.find((item) => item.name === "Fabric API") ?? search.data.projects[0];
+const versions = await evaluate(`window.electronAPI.content.versions(${JSON.stringify(query)},${JSON.stringify(project.id)})`);
+assert(versions.ok, versions.error); assert(versions.data.length);
+const installed = await evaluate(`window.electronAPI.content.install(${JSON.stringify({ query, projectId: project.id, versionId: versions.data[0].id, instanceId: instance.id })})`);
+assert(installed.ok, installed.error);
+const denied = await evaluate(`window.electronAPI.content.search(${JSON.stringify({ ...query, provider: "curseforge" })})`);
+if (!(await evaluate("window.electronAPI.content.status()")).curseforgeConfigured) { assert(!denied.ok); assert(denied.error.includes("CURSEFORGE_API_KEY")); }
+assert.equal((await evaluate(`window.electronAPI.content.install(${JSON.stringify({ query: { ...query, loader: "Quilt" }, projectId: "x", versionId: "x" })})`)).ok, false);
+const all = await evaluate("window.electronAPI.game.versions()");
+assert(all.some((item) => item.id === "1.7.10")); assert(!all.some((item) => item.id === "1.5.2")); assert(all.every((item) => item.type === "release"));
+assert.deepEqual(errors, []);
+console.log("PASS Electron: create Fabric pinned instance, release-only Vanilla manifest from 1.7.10, live Modrinth search/versions/install, missing CurseForge key, invalid loader IPC; no renderer exceptions.");
+console.log({ instanceId: instance.id, installed: versions.data[0].filename });
+ws.close();

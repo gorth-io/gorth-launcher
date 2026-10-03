@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="/assets/favicon.ico" sizes="any" />
+    <script>
+      (() => {
+        try {
+          const theme =
+            document.cookie
+              .split("; ")
+              .find((item) => item.startsWith("launcher-theme="))
+              ?.split("=")
+              .slice(1)
+              .join("=") ?? "system";
+          const systemDark = matchMedia("(prefers-color-scheme: dark)").matches;
+          const isDark = theme === "dark" || (theme === "system" && systemDark);
+
+          document.documentElement.classList.toggle("dark", isDark);
+          document.documentElement.dataset.theme = theme;
+          document.documentElement.style.colorScheme = isDark
+            ? "dark"
+            : "light";
+        } catch {
+          document.documentElement.classList.toggle(
+            "dark",
+            matchMedia("(prefers-color-scheme: dark)").matches,
+          );
+        }
+      })();
+    </script>
+    <style>
+      html,
+      body {
+        background: #ffffff;
+      }
+
+      html.dark,
+      html.dark body {
+        background: #171717;
+      }
+    </style>
+    <title>Gorth Launcher</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/app/renderer.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,119 @@
+launcher
+browser
+
+Kết luận
+Launcher hiện tại đã là một Vanilla launcher MVP hoạt động được: tải/kiểm tra file, tự cài Temurin 17, chạy Minecraft 1.20.1, quản lý Offline/Ely.by/Gorth, hiển thị tiến trình và dừng game.
+So với PrismLauncher/FreesmLauncher/PineconeMC, phần còn thiếu lớn nhất không nằm ở giao diện mà ở quản lý instance, mod loader/modpack, lưu trữ dữ liệu và phát hành production.
+Ưu tiên P0 — cần trước khi phát hành beta
+1. SQLite/Drizzle chưa được sử dụng thật
+   Schema đã có tại [database/schema.ts (line 12)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/database/schema.ts:12), nhưng không có runtime database service nào import schema. Instance và settings vẫn được lưu vào cookie phía renderer tại [lib/utils/launcher.ts (line 6)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/lib/utils/launcher.ts:6).
+   Hệ quả:
+   - Cookie có giới hạn dung lượng nhỏ.
+   - Dữ liệu instance và file game có thể lệch nhau.
+   - Khó migration, backup và phục hồi.
+   - Schema account/session hiện tại gần như chỉ mang tính thiết kế.
+2. Xóa instance chưa xóa dữ liệu game
+   Nút hiện tại chỉ loại cấu hình khỏi danh sách tại [app/index.tsx (line 413)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/app/index.tsx:413). Thư mục instances/<id> và world vẫn còn, gây chiếm dung lượng và tạo instance “mồ côi”.
+   Cần thêm:
+   - Xóa vào Trash, có Undo.
+   - Lựa chọn giữ hoặc xóa saves.
+   - Dọn cache/file không còn dùng.
+   - Phát hiện và nhập lại instance mồ côi.
+3. Auth production chưa hoàn chỉnh
+   - Gorth SSO vẫn cần đăng ký OAuth client thực tế.
+   - Gorth game chưa có backend token/Yggdrasil phù hợp.
+   - Ely.by mới dùng authlib-injector, chưa có official Authlib patches nên skin có thể không hoạt động trên một số server. Pinecone nêu rõ khác biệt này tại [README.md (line 19)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/packages/elyprism-pinecone/README.md:19).
+   - Hiện mới có mock test, chưa có live end-to-end; chính tài liệu cũng ghi nhận tại [docs/auth.md (line 48)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/docs/auth.md:48).
+4. Chưa có quy trình phát hành production
+   [package.json (line 1)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/package.json:1) vẫn là 0.0.0. [forge.config.ts (line 18)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/forge.config.ts:18) chưa có:
+   - Code signing Windows/macOS.
+   - Apple notarization.
+   - Auto update và release channel.
+   - CI build/test trên Windows, macOS Intel/ARM và Linux.
+   - Rollback/update verification.
+   - Crash report và diagnostic bundle.
+Ưu tiên P1 — để trở thành launcher đầy đủ
+1. Mod loader
+   Fabric, Forge, NeoForge và Quilt đang hiển thị trong UI nhưng không cài/chạy được; hiện chỉ hỗ trợ Vanilla 1.18–1.20.4 với Java 17, như xác nhận tại [docs/game.md (line 7)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/docs/game.md:7).
+2. Modpack và nền tảng nội dung
+   Thiếu:
+   - Modrinth.
+   - CurseForge/Flame.
+   - FTB.
+   - ATLauncher.
+   - Technic.
+   - Packwiz.
+   - Import/export .mrpack, CurseForge ZIP và MultiMC/Prism instance.
+   Prism có toàn bộ subsystem này tại [launcher/CMakeLists.txt (line 505)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/packages/PrismLauncher/launcher/CMakeLists.txt:505).
+3. Quản lý nội dung instance
+   Thiếu UI và logic quản lý:
+   - Mods và dependency.
+   - Resource packs, shader packs, data packs.
+   - Worlds và backup world.
+   - Screenshots.
+   - Server list.
+   - Notes và các log khác.
+   Các trang tương ứng của Prism nằm tại [launcher/CMakeLists.txt (line 900)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/packages/PrismLauncher/launcher/CMakeLists.txt:900).
+4. Vòng đời instance
+   Thiếu:
+   - Đổi tên và icon.
+   - Sao chép instance.
+   - Import/export.
+   - Nhóm instance.
+   - Shortcut ngoài desktop.
+   - Chuyển phiên bản hoặc loader.
+   - Cập nhật modpack.
+   - Khôi phục từ Trash.
+   Prism có copy/import/export tại [launcher/CMakeLists.txt (line 29)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/packages/PrismLauncher/launcher/CMakeLists.txt:29).
+5. Cấu hình riêng cho từng instance
+   Launcher hiện chỉ có memory và javaPath toàn cục tại [lib/utils/interface.ts (line 12)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/lib/utils/interface.ts:12).
+   Còn thiếu:
+   - RAM tối thiểu/tối đa riêng.
+   - JVM arguments.
+   - Java runtime riêng.
+   - Độ phân giải/fullscreen.
+   - Environment variables.
+   - Tài khoản mặc định riêng.
+   - Join server/world khi khởi chạy.
+   - Pre-launch/post-exit command.
+   - GPU/native OpenAL/GLFW options.
+6. Nhiều phiên bản Java/Minecraft
+   Default 1.20.1 + Temurin 17 là đúng yêu cầu hiện tại, nhưng để mở rộng cần:
+   - Java 8 cho bản cũ.
+   - Java 17 cho 1.18–1.20.4.
+   - Java 21 cho các bản mới.
+   - Runtime được chọn tự động theo metadata.
+   - Snapshot, historical và legacy assets.
+   - Version inheritance/component patching.
+7. Quản lý tiến trình nâng cao
+   Hiện chỉ cho một download/game toàn ứng dụng. Còn thiếu:
+   - Chạy nhiều instance đồng thời.
+   - Download queue riêng.
+   - Pause/resume.
+   - Tốc độ tải và ETA.
+   - Console riêng có tìm kiếm, lọc và xuất log.
+   - Crash detection/report.
+   - Lưu lịch sử chơi và thời lượng.
+Ưu tiên P2 — tiện ích và hoàn thiện trải nghiệm
+- Quản lý/upload/delete skin.
+- News feed.
+- Đa ngôn ngữ.
+- Proxy.
+- Discord Rich Presence như Freesm.
+- Copy screenshot vào clipboard.
+- External profiler như JProfiler/JVisualVM.
+- Deep link để nhập modpack.
+- Backup/restore launcher.
+- Kiểm tra dung lượng đĩa trước khi tải.
+- Accessibility và keyboard navigation đầy đủ.
+Freesm còn bổ sung custom auth server, Ely.by skin đầy đủ, Discord và screenshot clipboard như mô tả tại [docs/README.md (line 49)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/packages/FreesmLauncher/docs/README.md:49).
+Thứ tự triển khai đề xuất
+--1. Chuyển instance/settings sang SQLite và hoàn thiện xóa/đổi tên/copy instance.
+2. Hoàn tất live auth Gorth + Ely.by.
+--3. Thêm Fabric trước, sau đó NeoForge/Forge/Quilt.
+--4. Thêm Modrinth mod/modpack.
+5. Thêm per-instance settings và Java 8/17/21.
+6. Thêm updater, signing, notarization và CI release.
+7. Sau cùng mới triển khai worlds, screenshots, servers, Discord và các tiện ích.
+Microsoft login không được tính là tính năng thiếu vì đây là giới hạn sản phẩm bạn đã chủ động đặt ra.
+Lưu ý giấy phép: PrismLauncher và các fork dùng GPL. Gorth Launcher hiện khai báo MIT, vì vậy nên học kiến trúc và hành vi, không sao chép trực tiếp mã GPL nếu muốn giữ giấy phép MIT.
