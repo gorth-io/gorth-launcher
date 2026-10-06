@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { userProfilesMigration } from "@/database/migrations/user-profiles";
 import { drizzle } from "drizzle-orm/node-sqlite";
 import initialMigration from "./migrations/20260927204704_new_masque/migration.sql?raw";
 
@@ -11,7 +12,7 @@ export function openDatabase(filename: string) {
   const version = Number(
     client.prepare("PRAGMA user_version").get()?.user_version ?? 0,
   );
-  if (version > 2)
+  if (version > 4)
     throw new Error("Database được tạo bởi phiên bản launcher mới hơn.");
   if (version < 1) {
     client.exec("BEGIN IMMEDIATE");
@@ -40,6 +41,32 @@ export function openDatabase(filename: string) {
       if (!columns.some((column) => column.name === "loader_version"))
         client.exec("ALTER TABLE instances ADD COLUMN loader_version TEXT");
       client.exec("PRAGMA user_version = 2; COMMIT");
+    } catch (error) {
+      client.exec("ROLLBACK");
+      client.close();
+      throw error;
+    }
+  }
+  if (version < 3) {
+    client.exec("BEGIN IMMEDIATE");
+    try {
+      const columns = client.prepare("PRAGMA table_info(instances)").all();
+      if (!columns.some((column) => column.name === "icon_data"))
+        client.exec("ALTER TABLE instances ADD COLUMN icon_data TEXT");
+      if (!columns.some((column) => column.name === "group_name"))
+        client.exec("ALTER TABLE instances ADD COLUMN group_name TEXT");
+      client.exec("PRAGMA user_version = 3; COMMIT");
+    } catch (error) {
+      client.exec("ROLLBACK");
+      client.close();
+      throw error;
+    }
+  }
+  if (version < 4) {
+    client.exec("BEGIN IMMEDIATE");
+    try {
+      client.exec(userProfilesMigration);
+      client.exec("PRAGMA user_version = 4; COMMIT");
     } catch (error) {
       client.exec("ROLLBACK");
       client.close();

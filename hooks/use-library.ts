@@ -14,6 +14,7 @@ export function useLibrary() {
   const [data, setData] = useState<LibrarySnapshot>({
     instances: [],
     settings: defaultSettings,
+    instanceSettings: {},
     trash: [],
   });
   const [ready, setReady] = useState(false);
@@ -24,7 +25,11 @@ export function useLibrary() {
   useEffect(() => {
     let alive = true;
     const stop = window.electronAPI.library.onChanged((snapshot) => {
-      if (alive) setData({ ...snapshot, settings: pendingSettings.current ?? snapshot.settings });
+      if (alive)
+        setData({
+          ...snapshot,
+          settings: pendingSettings.current ?? snapshot.settings,
+        });
     });
     // Keep legacy data intact as a fallback backup. Main imports it only once.
     window.electronAPI.library
@@ -54,9 +59,15 @@ export function useLibrary() {
     if (changesInstance) setBusy(true);
     try {
       const result = await window.electronAPI.library.command(command);
-      if (command.action === "settings" && pendingSettings.current === command.settings)
+      if (
+        command.action === "settings" &&
+        pendingSettings.current === command.settings
+      )
         pendingSettings.current = null;
-      setData({ ...result.snapshot, settings: pendingSettings.current ?? result.snapshot.settings });
+      setData({
+        ...result.snapshot,
+        settings: pendingSettings.current ?? result.snapshot.settings,
+      });
       if (!result.ok) setError(result.error ?? "Không cập nhật được thư viện.");
       return result.ok;
     } catch {
@@ -67,7 +78,10 @@ export function useLibrary() {
     }
   }
   function setSettings(value: Settings | ((current: Settings) => Settings)) {
-    const next = typeof value === "function" ? value(pendingSettings.current ?? data.settings) : value;
+    const next =
+      typeof value === "function"
+        ? value(pendingSettings.current ?? data.settings)
+        : value;
     pendingSettings.current = next;
     setData((current) => ({ ...current, settings: next }));
     queue.current = queue.current.then(async () => {

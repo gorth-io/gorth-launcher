@@ -1,4 +1,4 @@
-import { Box, ChevronRight } from "lucide-react";
+import { Box, ChevronRight, Folder } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import type { Instance } from "@/lib/utils/interface";
@@ -6,18 +6,30 @@ export interface InstanceCardsProps {
   items: Instance[];
   onSelect: (instance: Instance) => void;
   statusLabel: (id: string) => string;
+  layout?: "grid" | "list";
 }
 export function InstanceCards({
   items,
   onSelect,
   statusLabel,
+  layout = "grid",
 }: InstanceCardsProps) {
   return (
-    <div className="grid grid-cols-2 gap-4 xl:grid-cols-3">
+    <div
+      className={layout === "list" ? "grid gap-3" : "grid gap-4 xl:grid-cols-2"}
+    >
       {items.map((item) => (
         <Card key={item.id} className="gap-0 overflow-hidden py-0">
           <div className="flex h-24 items-center justify-center gap-3 bg-muted text-muted-foreground">
-            <Box size={42} strokeWidth={1.2} />
+            {item.iconData ? (
+              <img
+                src={item.iconData}
+                alt=""
+                className="size-14 rounded-xl object-cover"
+              />
+            ) : (
+              <Box size={42} strokeWidth={1.2} />
+            )}
             <span>
               {item.loader} {item.loaderVersion}
             </span>
@@ -27,6 +39,12 @@ export function InstanceCards({
             <span className="text-sm text-muted-foreground">
               Minecraft {item.version}
             </span>
+            {item.group && (
+              <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                <Folder className="size-3" />
+                {item.group}
+              </span>
+            )}
             <div className="flex items-center justify-between pt-2">
               <span className="text-xs text-muted-foreground">
                 {statusLabel(item.id)}

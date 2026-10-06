@@ -6,6 +6,7 @@ import { pipeline } from "node:stream/promises";
 import { Readable, Transform } from "node:stream";
 import { parseHttpsUrl } from "@/lib/utils/schema";
 import type { Artifact } from "@/lib/utils/interface";
+import { transferProgress } from "./transfer";
 const hosts = new Set([
   "piston-meta.mojang.com",
   "launchermeta.mojang.com",
@@ -126,9 +127,11 @@ export async function download(
       if (!result.body) throw new Error("Không nhận được file tải xuống.");
       let bytes = 0;
       const verifier = createHash(algorithm);
+      const report = transferProgress.getStore();
       const guard = new Transform({
         transform(chunk, _encoding, callback) {
           bytes += chunk.length;
+          report?.(chunk.length);
           if (bytes > (artifact.size ?? 1024 ** 3)) {
             callback(new Error("File tải vượt kích thước dự kiến."));
             return;

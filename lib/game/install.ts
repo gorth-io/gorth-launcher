@@ -7,7 +7,7 @@ import type {
   GameIdentity,
   Instance,
   InstalledGame,
-  Settings,
+  InstanceSettings,
 } from "@/lib/utils/interface";
 import { download, json, readJson, safePath } from "./files";
 import { argumentsFor, libraryFiles, versionMetadata } from "./metadata";
@@ -34,7 +34,7 @@ export function validateInstance(value: Instance) {
 export async function installGame(
   root: string,
   instance: Instance,
-  settings: Settings,
+  settings: InstanceSettings,
   signal: AbortSignal,
   progress: (message: string, done: number, total: number) => void,
 ): Promise<InstalledGame> {
@@ -235,7 +235,7 @@ export async function injector(root: string, signal: AbortSignal) {
 export function launchArguments(
   game: InstalledGame,
   session: GameIdentity,
-  memory: number,
+  settings: InstanceSettings,
   agent?: string,
 ) {
   const variables: Record<string, string> = {
@@ -264,8 +264,8 @@ export function launchArguments(
     user_type: "mojang",
     version_type: game.version.type,
     user_properties: "{}",
-    resolution_width: "1280",
-    resolution_height: "720",
+    resolution_width: String(settings.resolutionWidth),
+    resolution_height: String(settings.resolutionHeight),
   };
   if (session.authlibRoot && !agent)
     throw new Error("Thiếu authlib-injector cho tài khoản online.");
@@ -277,22 +277,54 @@ export function launchArguments(
     ],
     variables,
   );
-  const args = ["-Xms512m", "-Xmx" + memoryLimit(memory) + "G", ...jvm];
+  const args = [
+    "-Xms" + memoryLimit(settings.memoryMin) + "G",
+    "-Xmx" + memoryLimit(settings.memoryMax) + "G",
+    ...settings.jvmArguments,
+    ...(settings.openGlPath
+      ? ["-Dorg.lwjgl.opengl.libname=" + settings.openGlPath]
+      : []),
+    ...(settings.openAlPath
+      ? ["-Dorg.lwjgl.openal.libname=" + settings.openAlPath]
+      : []),
+    ...(settings.glfwPath
+      ? ["-Dorg.lwjgl.glfw.libname=" + settings.glfwPath]
+      : []),
+    ...jvm,
+  ];
   if (agent && session.authlibRoot)
     args.push("-javaagent:" + agent + "=" + session.authlibRoot);
   if (game.logConfig && game.version.logging?.client)
     args.push(
       game.version.logging.client.argument.replace("${path}", game.logConfig),
     );
-  return [
-    ...args,
-    game.version.mainClass,
-    ...argumentsFor(
-      game.version.arguments?.game ??
-        legacyArguments(game.version.minecraftArguments ?? ""),
-      variables,
-    ),
-  ];
+  const gameArguments = argumentsFor(
+    game.version.arguments?.game ??
+      legacyArguments(game.version.minecraftArguments ?? ""),
+    variables,
+  );
+  if (settings.fullscreen) gameArguments.push("--fullscreen");
+  else
+    gameArguments.push(
+      "--width",
+      String(settings.resolutionWidth),
+      "--height",
+      String(settings.resolutionHeight),
+    );
+  if (settings.joinServer) {
+    const separator = settings.joinServer.lastIndexOf(":");
+    const hasPort =
+      separator > 0 &&
+      /^\d{1,5}$/.test(settings.joinServer.slice(separator + 1));
+    gameArguments.push(
+      "--server",
+      hasPort ? settings.joinServer.slice(0, separator) : settings.joinServer,
+    );
+    if (hasPort)
+      gameArguments.push("--port", settings.joinServer.slice(separator + 1));
+  } else if (settings.joinWorld)
+    gameArguments.push("--quickPlaySingleplayer", settings.joinWorld);
+  return [...args, game.version.mainClass, ...gameArguments];
 }
 
 export function legacyArguments(value: string) {

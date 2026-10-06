@@ -1,12 +1,28 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { mkdir, lstat, readdir, cp, rename, rm } from "node:fs/promises";
+import {
+  mkdir,
+  lstat,
+  readdir,
+  cp,
+  rename,
+  rm,
+  readFile,
+} from "node:fs/promises";
 import { eq, asc, like } from "drizzle-orm";
 import { z } from "zod";
 import { openDatabase } from "@/database/client";
 import { instances, settings } from "@/database/schema";
-import type { Instance, LibrarySnapshot } from "@/lib/utils/interface";
+import type {
+  Instance,
+  LibrarySnapshot,
+  PlaySession,
+} from "@/lib/utils/interface";
 import { supportedLoader } from "@/lib/game/catalog";
+import {
+  defaultInstanceSettings,
+  instanceSettingsSchema,
+} from "@/lib/library/instance-settings";
 
 const id = z.string().regex(/^[a-zA-Z0-9-]{1,80}$/);
 const name = z.string().trim().min(1).max(60);
@@ -18,11 +34,19 @@ const instance = z.object({
   version,
   loader,
   loaderVersion: z.string().max(60).nullish(),
+  iconData: z.string().max(3_000_000).nullish(),
+  group: z.string().trim().max(60).nullish(),
   createdAt: z.number().int().nonnegative(),
 });
+const trashEntry = instance.extend({
+  deletedAt: z.number().int().nonnegative(),
+});
 const configuration = z.object({
+  showTitlebarLogo: z.boolean().default(true),
   memory: z.number().int().min(1).max(64),
   javaPath: z.string().max(4096),
+  trashRetentionDays: z.number().int().min(0).max(365).default(30),
+  keepSavesOnTrashCleanup: z.boolean().default(true),
 });
 const commandSchema = z.discriminatedUnion("action", [
   z
@@ -41,6 +65,36 @@ const commandSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("copy"), id, name }),
   z.object({ action: z.literal("delete"), id }),
   z.object({ action: z.literal("restore"), id }),
+  z.object({
+    action: z.literal("metadata"),
+    id,
+    group: z.string().trim().max(60).nullable(),
+  }),
+  z.object({
+    action: z.literal("icon"),
+    id,
+    iconData: z.string().max(3_000_000).nullable(),
+  }),
+  z
+    .object({
+      action: z.literal("runtime"),
+      id,
+      version,
+      loader: z.enum(["Vanilla", "Fabric", "Forge", "NeoForge"]),
+      loaderVersion: z.string().max(60).nullish(),
+    })
+    .refine(
+      supportedLoader,
+      "Phiên bản mod loader không nằm trong danh sách được hỗ trợ.",
+    ),
+  z.object({ action: z.literal("trash.purge"), id, keepSaves: z.boolean() }),
+  z.object({ action: z.literal("trash.cleanup") }),
+  z.object({ action: z.literal("orphans.import") }),
+  z.object({
+    action: z.literal("instance.settings"),
+    id,
+    settings: instanceSettingsSchema,
+  }),
   z.object({ action: z.literal("settings"), settings: configuration }),
   z.object({
     action: z.literal("migrate"),
@@ -75,7 +129,7 @@ export async function createLibraryStore(
 ) {
   await mkdir(dataPath, { recursive: true });
   const { client, db } = openDatabase(
-    path.join(dataPath, "gorth-launcher.sqlite"),
+    path.join(dataPath, "gorth-launcher.db"),
   );
   const root = path.join(dataPath, "minecraft", "instances");
   const trashRoot = path.join(dataPath, "minecraft", ".trash");
@@ -115,22 +169,46 @@ export async function createLibraryStore(
     if (!item) throw new Error("Không tìm thấy instance.");
     return item;
   };
-  const snapshot = (): LibrarySnapshot => ({
-    instances: db
+  const snapshot = (): LibrarySnapshot => {
+    const launcherSettings = configuration.parse(
+      JSON.parse(
+        getValue("launcher") ??
+          '{"memory":4,"javaPath":"","trashRetentionDays":30,"keepSavesOnTrashCleanup":true}',
+      ),
+    );
+    const currentInstances = db
       .select()
       .from(instances)
       .orderBy(asc(instances.createdAt))
-      .all(),
-    settings: configuration.parse(
-      JSON.parse(getValue("launcher") ?? '{"memory":4,"javaPath":""}'),
-    ),
-    trash: db
-      .select()
-      .from(settings)
-      .where(like(settings.key, "trash:%"))
-      .all()
-      .map((row) => instance.parse(JSON.parse(row.value))),
-  });
+      .all();
+    return {
+      instances: currentInstances,
+      settings: launcherSettings,
+      instanceSettings: Object.fromEntries(
+        currentInstances.map((item) => {
+          const stored = getValue("instance-settings:" + item.id);
+          return [
+            item.id,
+            stored
+              ? instanceSettingsSchema.parse(JSON.parse(stored))
+              : defaultInstanceSettings(launcherSettings),
+          ];
+        }),
+      ),
+      trash: db
+        .select()
+        .from(settings)
+        .where(like(settings.key, "trash:%"))
+        .all()
+        .map((row) => {
+          const value = JSON.parse(row.value);
+          return trashEntry.parse({
+            ...value,
+            deletedAt: value.deletedAt ?? value.createdAt,
+          });
+        }),
+    };
+  };
   // Complete or roll back interrupted filesystem operations before exposing the library.
   const pending = getValue("instance-operation");
   if (pending) {
@@ -153,6 +231,59 @@ export async function createLibraryStore(
       await rename(live, trash);
     db.delete(settings).where(eq(settings.key, "instance-operation")).run();
   }
+  async function purgeTrash(value: string, keepSaves: boolean) {
+    const raw = JSON.parse(getValue("trash:" + id.parse(value)) ?? "null");
+    const parsed = trashEntry.parse({
+      ...raw,
+      deletedAt: raw?.deletedAt ?? raw?.createdAt,
+    });
+    const directory = path.join(trashRoot, parsed.id);
+    if (keepSaves) {
+      const saves = path.join(directory, "game", "saves");
+      if (await exists(saves)) {
+        await regularTree(saves);
+        const recovered = path.join(
+          dataPath,
+          "minecraft",
+          "recovered-saves",
+          parsed.id + "-" + parsed.deletedAt,
+        );
+        await mkdir(path.dirname(recovered), { recursive: true });
+        await rename(saves, recovered);
+      }
+    }
+    if (await exists(directory)) await rm(directory, { recursive: true });
+    transaction(() => {
+      db.delete(settings)
+        .where(eq(settings.key, "trash:" + parsed.id))
+        .run();
+      db.delete(settings)
+        .where(eq(settings.key, "instance-settings:" + parsed.id))
+        .run();
+    });
+  }
+  const automaticSettings = configuration.parse(
+    JSON.parse(
+      getValue("launcher") ??
+        '{"memory":4,"javaPath":"","trashRetentionDays":30,"keepSavesOnTrashCleanup":true}',
+    ),
+  );
+  if (automaticSettings.trashRetentionDays > 0) {
+    const cutoff =
+      Date.now() - automaticSettings.trashRetentionDays * 86_400_000;
+    for (const row of db
+      .select()
+      .from(settings)
+      .where(like(settings.key, "trash:%"))
+      .all()) {
+      const value = JSON.parse(row.value);
+      if ((value.deletedAt ?? value.createdAt) < cutoff)
+        await purgeTrash(
+          row.key.slice("trash:".length),
+          automaticSettings.keepSavesOnTrashCleanup,
+        );
+    }
+  }
   let working = false;
   async function command(raw: unknown) {
     if (working) throw new Error("Đang xử lý thư viện. Vui lòng chờ.");
@@ -168,7 +299,21 @@ export async function createLibraryStore(
     if (!parsed.success)
       throw new Error("Thông tin instance hoặc cài đặt không hợp lệ.");
     const c = parsed.data;
-    if (["copy", "delete", "restore"].includes(c.action) && isBusy())
+    if (
+      [
+        "copy",
+        "delete",
+        "restore",
+        "instance.settings",
+        "runtime",
+        "icon",
+        "metadata",
+        "trash.purge",
+        "trash.cleanup",
+        "orphans.import",
+      ].includes(c.action) &&
+      isBusy()
+    )
       throw new Error(
         "Hãy dừng game hoặc tác vụ tải trước khi thay đổi dữ liệu instance.",
       );
@@ -183,7 +328,10 @@ export async function createLibraryStore(
             putValue("legacy-imported", true);
           });
       } else if (c.action === "settings") putValue("launcher", c.settings);
-      else if (c.action === "create")
+      else if (c.action === "instance.settings") {
+        getInstance(c.id);
+        putValue("instance-settings:" + c.id, c.settings);
+      } else if (c.action === "create")
         db.insert(instances)
           .values({
             id: randomUUID(),
@@ -194,7 +342,74 @@ export async function createLibraryStore(
             createdAt: Date.now(),
           })
           .run();
-      else if (c.action === "rename") {
+      else if (c.action === "metadata") {
+        getInstance(c.id);
+        db.update(instances)
+          .set({ group: c.group || null })
+          .where(eq(instances.id, c.id))
+          .run();
+      } else if (c.action === "icon") {
+        getInstance(c.id);
+        db.update(instances)
+          .set({ iconData: c.iconData })
+          .where(eq(instances.id, c.id))
+          .run();
+      } else if (c.action === "runtime") {
+        getInstance(c.id);
+        db.update(instances)
+          .set({
+            version: c.version,
+            loader: c.loader,
+            loaderVersion: c.loaderVersion ?? null,
+          })
+          .where(eq(instances.id, c.id))
+          .run();
+        await rm(path.join(root, c.id, "installed.json"), { force: true });
+      } else if (c.action === "trash.purge") {
+        await purgeTrash(c.id, c.keepSaves);
+      } else if (c.action === "trash.cleanup") {
+        const launcherSettings = configuration.parse(
+          JSON.parse(getValue("launcher")!),
+        );
+        for (const item of snapshot().trash)
+          await purgeTrash(item.id, launcherSettings.keepSavesOnTrashCleanup);
+      } else if (c.action === "orphans.import") {
+        const known = new Set(snapshot().instances.map((item) => item.id));
+        for (const entry of await readdir(root, { withFileTypes: true })) {
+          if (
+            !entry.isDirectory() ||
+            entry.name.startsWith(".") ||
+            known.has(entry.name) ||
+            !id.safeParse(entry.name).success
+          )
+            continue;
+          try {
+            const receipt = JSON.parse(
+              await readFile(
+                path.join(root, entry.name, "installed.json"),
+                "utf8",
+              ),
+            );
+            const item = instance.parse({
+              id: entry.name,
+              name: entry.name,
+              version: receipt.version,
+              loader: receipt.loader ?? "Vanilla",
+              loaderVersion: receipt.loaderVersion ?? null,
+              iconData: null,
+              group: "Đã khôi phục",
+              createdAt: Math.trunc(
+                (await lstat(path.join(root, entry.name))).birthtimeMs ||
+                  Date.now(),
+              ),
+            });
+            if (!supportedLoader(item)) continue;
+            db.insert(instances).values(item).onConflictDoNothing().run();
+          } catch {
+            /* Ignore folders without valid Gorth installation metadata. */
+          }
+        }
+      } else if (c.action === "rename") {
         getInstance(c.id);
         db.update(instances)
           .set({ name: c.name })
@@ -226,6 +441,12 @@ export async function createLibraryStore(
           }
           transaction(() => {
             db.insert(instances).values(copy).run();
+            const storedSettings = getValue("instance-settings:" + original.id);
+            if (storedSettings)
+              putValue(
+                "instance-settings:" + copy.id,
+                instanceSettingsSchema.parse(JSON.parse(storedSettings)),
+              );
             db.delete(settings)
               .where(eq(settings.key, "instance-operation"))
               .run();
@@ -264,7 +485,7 @@ export async function createLibraryStore(
                 .where(eq(settings.key, "trash:" + item.id))
                 .run();
             } else {
-              putValue("trash:" + item.id, item);
+              putValue("trash:" + item.id, { ...item, deletedAt: Date.now() });
               db.delete(instances).where(eq(instances.id, item.id)).run();
             }
             db.delete(settings)
@@ -323,6 +544,36 @@ export async function createLibraryStore(
     importInstance,
     command,
     getInstance,
+    playHistory: () => {
+      try {
+        return z
+          .array(
+            z.object({
+              id: z.string(),
+              instanceId: id,
+              startedAt: z.number(),
+              endedAt: z.number(),
+              duration: z.number(),
+              exitCode: z.number().nullable(),
+              crashed: z.boolean(),
+            }),
+          )
+          .max(1000)
+          .parse(JSON.parse(getValue("play-history") ?? "[]")) as PlaySession[];
+      } catch {
+        return [] as PlaySession[];
+      }
+    },
+    recordPlaySession: (session: PlaySession) => {
+      const current = (() => {
+        try {
+          return JSON.parse(getValue("play-history") ?? "[]") as PlaySession[];
+        } catch {
+          return [];
+        }
+      })();
+      putValue("play-history", [...current, session].slice(-1000));
+    },
     needsMigration: () => !getValue("legacy-imported"),
     isWorking: () => working,
     close: () => client.close(),

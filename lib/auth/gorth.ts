@@ -1,26 +1,33 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { createServer } from "node:http";
+import { registerAuthCallback } from "@/services/auth-callback";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import {
-  gorthIssuer,
-  gorthClientId,
-  gorthRedirectUri,
+  ssoIssuer,
+  ssoOAuthClientId,
+  ssoRedirectUri,
 } from "@/lib/utils/environment";
 import { parseHttpUrl } from "@/lib/utils/schema";
 import { trustedUrl, tokenSet } from "./model";
 import type { LauncherSession, Tokens } from "@/lib/utils/interface";
 import { requestJson, formRequest } from "./http";
+import { fetcher } from "@/lib/utils/fetcher";
 
-export const gorthBinding = () => gorthIssuer + "|" + gorthClientId;
+export const gorthBinding = () => ssoIssuer + "|" + ssoOAuthClientId;
 async function metadata(signal?: AbortSignal) {
-  if (!gorthIssuer) throw new Error("Chưa cấu hình VITE_GORTH_SSO_ISSUER.");
-  const issuer = trustedUrl(parseHttpUrl(gorthIssuer).href, true);
+  if (!ssoIssuer || !ssoOAuthClientId || !ssoRedirectUri)
+    throw new Error(
+      "Chưa cấu hình VITE_SSO_CLIENT_URL, VITE_SSO_OAUTH_CLIENT_ID hoặc VITE_APP_URL.",
+    );
+  const issuer = trustedUrl(parseHttpUrl(ssoIssuer).href, true);
   const data = await requestJson(
-    new URL("/.well-known/openid-configuration", issuer),
+    new URL(
+      issuer.pathname.replace(/\/$/, "") + "/.well-known/openid-configuration",
+      issuer,
+    ),
     {},
     signal,
   );
-  if (data.issuer !== gorthIssuer)
+  if (data.issuer !== ssoIssuer)
     throw new Error("Issuer Gorth không khớp cấu hình.");
   const endpoint = (key: string) => {
     if (typeof data[key] !== "string")
@@ -55,8 +62,8 @@ async function verifyIdentity(
     raw,
     createRemoteJWKSet(jwks),
     {
-      issuer: gorthIssuer,
-      audience: gorthClientId,
+      issuer: ssoIssuer,
+      audience: ssoOAuthClientId,
       algorithms: ["RS256", "ES256", "EdDSA"],
       requiredClaims: ["sub", "exp", "iat"],
       clockTolerance: 5,
@@ -65,10 +72,10 @@ async function verifyIdentity(
   if (
     !payload.sub ||
     (nonce && payload.nonce !== nonce) ||
-    (payload.azp && payload.azp !== gorthClientId) ||
+    (payload.azp && payload.azp !== ssoOAuthClientId) ||
     (Array.isArray(payload.aud) &&
       payload.aud.length > 1 &&
-      payload.azp !== gorthClientId)
+      payload.azp !== ssoOAuthClientId)
   )
     throw new Error("ID token Gorth không hợp lệ.");
   if (payload.at_hash !== undefined) {
@@ -102,26 +109,31 @@ async function verifyIdentity(
   };
 }
 export async function loginGorth(
-  open: (url: string) => Promise<void>,
+  open: (
+    url: string,
+    receiveCallback: (url: string) => boolean,
+  ) => Promise<void>,
   signal: AbortSignal,
+  mode: "login" | "register" = "login",
 ): Promise<LauncherSession> {
   const config = await metadata(signal);
-  const redirect = parseHttpUrl(gorthRedirectUri);
+  const redirect = parseHttpUrl(ssoRedirectUri);
   if (
     redirect.protocol !== "http:" ||
-    redirect.hostname !== "127.0.0.1" ||
+    !["127.0.0.1", "localhost"].includes(redirect.hostname) ||
     !redirect.port ||
     redirect.search ||
     redirect.hash ||
     redirect.username ||
     redirect.password
   )
-    throw new Error("Callback phải là HTTP 127.0.0.1 với port cố định.");
+    throw new Error(
+      "Callback phải là HTTP localhost hoặc 127.0.0.1 với port cố định.",
+    );
   const state = randomBytes(32).toString("base64url");
   const nonce = randomBytes(32).toString("base64url");
   const verifier = randomBytes(32).toString("base64url");
   const challenge = createHash("sha256").update(verifier).digest("base64url");
-  const server = createServer();
   let resolveCode!: (code: string) => void;
   let rejectCode!: (reason: Error) => void;
   const codePromise = new Promise<string>((resolve, reject) => {
@@ -131,24 +143,22 @@ export async function loginGorth(
   // Consume early aborts before awaiting the browser opening.
   void codePromise.catch(() => {});
   let consumed = false;
-  server.on("request", (req, res) => {
+  const receiveCallback = (value: string): boolean => {
     let url: URL;
     try {
-      if ((req.url?.length ?? 0) > 8192) throw new Error("Oversized callback");
-      url = parseHttpUrl(new URL(req.url ?? "/", redirect.origin).href);
+      if (value.length > 8192) return false;
+      url = parseHttpUrl(value);
     } catch {
-      res.writeHead(400).end("Invalid callback.");
-      return;
+      return false;
     }
-    res.setHeader("Cache-Control", "no-store");
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
     if (
-      req.method !== "GET" ||
-      req.headers.host !== redirect.host ||
-      url.pathname !== redirect.pathname
+      url.origin !== redirect.origin ||
+      url.pathname !== redirect.pathname ||
+      url.hash ||
+      url.username ||
+      url.password
     ) {
-      res.writeHead(404).end();
-      return;
+      return false;
     }
     const returned = url.searchParams.get("state") ?? "";
     if (
@@ -157,45 +167,39 @@ export async function loginGorth(
       Buffer.byteLength(returned) !== Buffer.byteLength(state) ||
       !timingSafeEqual(Buffer.from(returned), Buffer.from(state))
     ) {
-      res.writeHead(400).end("Invalid callback.");
-      return;
+      return false;
     }
     consumed = true;
     if (
       (config.requiresIssuer || url.searchParams.has("iss")) &&
       (url.searchParams.getAll("iss").length !== 1 ||
-        url.searchParams.get("iss") !== gorthIssuer)
+        url.searchParams.get("iss") !== ssoIssuer)
     ) {
-      res.writeHead(400).end("Invalid issuer.");
       rejectCode(new Error("Callback issuer mismatch."));
-      return;
+      return false;
     }
     if (
       url.searchParams.has("error") ||
       url.searchParams.getAll("code").length !== 1 ||
       !url.searchParams.get("code")
     ) {
-      res.writeHead(400).end("Đăng nhập đã bị từ chối.");
       rejectCode(new Error("Đăng nhập Gorth bị từ chối."));
-      return;
+      return false;
     }
-    res.end("Đã nhận phản hồi. Bạn có thể quay lại Gorth Launcher.");
     resolveCode(url.searchParams.get("code")!);
-  });
+    return true;
+  };
+  const unregisterCallback = registerAuthCallback(receiveCallback);
   const abort = () => rejectCode(new Error("Đã hủy đăng nhập."));
   signal.addEventListener("abort", abort, { once: true });
   const timer = setTimeout(
     () => rejectCode(new Error("Đăng nhập hết thời gian chờ.")),
-    180_000,
+    mode === "register" ? 600_000 : 180_000,
   );
   try {
     signal.throwIfAborted();
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(Number(redirect.port), "127.0.0.1", resolve);
-    });
     for (const [key, value] of Object.entries({
-      client_id: gorthClientId,
+      client_id: ssoOAuthClientId,
       redirect_uri: redirect.href,
       response_type: "code",
       scope: "openid profile email offline_access",
@@ -205,7 +209,12 @@ export async function loginGorth(
       code_challenge_method: "S256",
     }))
       config.authorize.searchParams.set(key, value);
-    await open(config.authorize.href);
+    // Match the web applications: prompt=create preserves OAuth through sign-up/OTP.
+    if (mode === "register")
+      config.authorize.searchParams.set("prompt", "create");
+    // Reuse a valid SSO session. Forcing login while the SSO form auto-resumes
+    // an existing account would bounce endlessly between login and authorize.
+    await open(config.authorize.href, receiveCallback);
     const code = await codePromise;
     signal.throwIfAborted();
     const data = await formRequest(
@@ -213,7 +222,7 @@ export async function loginGorth(
       {
         grant_type: "authorization_code",
         code,
-        client_id: gorthClientId,
+        client_id: ssoOAuthClientId,
         redirect_uri: redirect.href,
         code_verifier: verifier,
       },
@@ -237,8 +246,7 @@ export async function loginGorth(
   } finally {
     clearTimeout(timer);
     signal.removeEventListener("abort", abort);
-    server.close();
-    server.closeAllConnections();
+    unregisterCallback();
   }
 }
 export async function refreshGorth(
@@ -253,7 +261,7 @@ export async function refreshGorth(
     config.token,
     {
       grant_type: "refresh_token",
-      client_id: gorthClientId,
+      client_id: ssoOAuthClientId,
       refresh_token: old.refreshToken,
     },
     signal,
@@ -294,6 +302,14 @@ async function userInfo(
   return {
     name: typeof info.name === "string" && info.name ? info.name : subject,
     email: typeof info.email === "string" ? info.email : undefined,
+    emailVerified:
+      typeof info.email_verified === "boolean"
+        ? info.email_verified
+        : undefined,
+    image:
+      typeof info.picture === "string" && /^https?:\/\//i.test(info.picture)
+        ? info.picture
+        : undefined,
     username:
       typeof info.preferred_username === "string"
         ? info.preferred_username
@@ -315,19 +331,23 @@ export async function revokeGorth(tokens: Tokens, signal: AbortSignal) {
     entries
       .filter(([, token]) => !!token)
       .map(async ([hint, token]) => {
-        const response = await fetch(config.revoke!, {
+        const response = await fetcher<string>({
+          url: config.revoke!,
           method: "POST",
           redirect: "error",
-          signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]),
+          signal,
+          timeout: 20_000,
+          responseType: "text",
+          validateStatus: () => true,
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: new URLSearchParams({
-            client_id: gorthClientId,
+            client_id: ssoOAuthClientId,
             token: token!,
             token_type_hint: hint,
           }),
         });
-        if (!response.ok) throw new Error("SSO không thu hồi được token.");
-        await response.body?.cancel();
+        if (response.status < 200 || response.status >= 300)
+          throw new Error("SSO không thu hồi được token.");
       }),
   );
   if (results.some((result) => result.status === "rejected"))

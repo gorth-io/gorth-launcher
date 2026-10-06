@@ -1,12 +1,148 @@
 import path from "node:path";
-import { mkdir, lstat, readdir, copyFile, stat } from "node:fs/promises";
+import {
+  mkdir,
+  lstat,
+  readdir,
+  copyFile,
+  stat,
+  writeFile,
+  rename,
+  rm,
+} from "node:fs/promises";
 import { z } from "zod";
 import extract from "extract-zip";
-import { safePath, readJson, download } from "@/lib/game/files";
+import { safePath, readJson, download, digest } from "@/lib/game/files";
 import { supportedLoader } from "@/lib/game/catalog";
 import { resolveContentFile } from "./providers";
 import type { Instance, Artifact } from "@/lib/utils/interface";
-import type { ContentQuery } from "./interface";
+import type { ContentProvider, ContentQuery } from "./interface";
+
+export interface ModpackReceipt {
+  version: 1;
+  name?: string;
+  source: {
+    provider: ContentProvider;
+    projectId: string;
+    versionId: string;
+  } | null;
+  files: Record<string, string>;
+}
+const packReceiptName = ".gorth-modpack.json";
+
+async function treeHashes(
+  root: string,
+  current = root,
+  result: Record<string, string> = {},
+) {
+  for (const entry of await readdir(current, { withFileTypes: true })) {
+    const file = contentPath(current, entry.name);
+    const info = await lstat(file);
+    if (info.isSymbolicLink()) throw new Error("Modpack chứa symlink.");
+    if (info.isDirectory()) await treeHashes(root, file, result);
+    else if (info.isFile())
+      result[path.relative(root, file).split(path.sep).join("/")] =
+        await digest(file, "sha1");
+  }
+  return result;
+}
+
+export async function readModpackReceipt(instanceRoot: string) {
+  try {
+    const value = await readJson<ModpackReceipt>(
+      path.join(instanceRoot, packReceiptName),
+    );
+    if (value.version !== 1 || !value.files || typeof value.files !== "object")
+      throw new Error("Metadata modpack không hợp lệ.");
+    return value;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+export async function setModpackSource(
+  payload: string,
+  source: ModpackReceipt["source"],
+) {
+  const receipt = await readModpackReceipt(payload);
+  if (!receipt) throw new Error("Thiếu metadata modpack.");
+  await writeFile(
+    path.join(payload, packReceiptName),
+    JSON.stringify({ ...receipt, source }),
+  );
+}
+
+export async function mergeModpackUpdate(
+  instanceRoot: string,
+  payload: string,
+) {
+  const previous = await readModpackReceipt(instanceRoot);
+  const next = await readModpackReceipt(payload);
+  if (!previous?.source || !next?.source)
+    throw new Error("Modpack không có nguồn cập nhật.");
+  if (
+    previous.source.provider !== next.source.provider ||
+    previous.source.projectId !== next.source.projectId
+  )
+    throw new Error("Nguồn modpack cập nhật không khớp instance.");
+  const liveGame = path.join(instanceRoot, "game");
+  const nextGame = path.join(payload, "game");
+  const safeLiveFile = async (relative: string) => {
+    const parts = relative.split("/");
+    let directory = liveGame;
+    const rootInfo = await lstat(directory);
+    if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink())
+      throw new Error("Thư mục game không an toàn.");
+    for (const segment of parts.slice(0, -1)) {
+      directory = contentPath(directory, segment);
+      try {
+        await mkdir(directory);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+      const info = await lstat(directory);
+      if (!info.isDirectory() || info.isSymbolicLink())
+        throw new Error("Modpack không ghi qua thư mục symlink.");
+    }
+    return contentPath(liveGame, relative);
+  };
+  const finalFiles: Record<string, string> = {};
+  for (const [relative, oldHash] of Object.entries(previous.files)) {
+    if (relative in next.files) continue;
+    const target = await safeLiveFile(relative);
+    try {
+      if ((await digest(target, "sha1")) === oldHash) await rm(target);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  for (const [relative, newHash] of Object.entries(next.files)) {
+    const source = contentPath(nextGame, relative);
+    const target = await safeLiveFile(relative);
+    const oldHash = previous.files[relative];
+    let currentHash: string | undefined;
+    try {
+      currentHash = await digest(target, "sha1");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (!currentHash || (oldHash && currentHash === oldHash)) {
+      await mkdir(path.dirname(target), { recursive: true });
+      const temporary = target + ".gorth-update";
+      await copyFile(source, temporary);
+      await rename(temporary, target);
+      finalFiles[relative] = newHash;
+    } else if (currentHash === newHash) finalFiles[relative] = newHash;
+    else if (oldHash) finalFiles[relative] = oldHash;
+    // Existing untracked/modified files remain untouched and untracked.
+  }
+  const receipt = path.join(instanceRoot, packReceiptName);
+  await writeFile(
+    receipt + ".tmp",
+    JSON.stringify({ ...next, files: finalFiles }),
+  );
+  await rename(receipt + ".tmp", receipt);
+}
 
 export function contentPath(root: string, relative: string) {
   if (
@@ -230,7 +366,9 @@ export async function unpackPack(
       );
       if (
         path.basename(resolved.filename) !== resolved.filename ||
-        !resolved.filename.endsWith(resolved.directory === "mods" ? ".jar" : ".zip")
+        !resolved.filename.endsWith(
+          resolved.directory === "mods" ? ".jar" : ".zip",
+        )
       )
         throw new Error("Tên file mod không hợp lệ.");
       files.push({
@@ -261,5 +399,14 @@ export async function unpackPack(
   for (const folder of overrides)
     await copyOverrides(contentPath(unpacked, folder), game, signal);
   signal.throwIfAborted();
+  await writeFile(
+    path.join(staging, "payload", packReceiptName),
+    JSON.stringify({
+      version: 1,
+      name: name.slice(0, 200),
+      source: null,
+      files: await treeHashes(game),
+    } satisfies ModpackReceipt),
+  );
   return { name: name.slice(0, 60), ...runtime };
 }

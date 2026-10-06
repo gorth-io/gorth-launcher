@@ -1,7 +1,10 @@
 import {
+  createContext,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
+  useState,
   type RefObject,
   type ComponentProps,
 } from "react";
@@ -13,21 +16,30 @@ import {
   TooltipProvider,
 } from "@/components/custom/tooltip";
 
+const TooltipOpenContext = createContext(false);
+// One visual tooltip per chrome renderer, including while old popups animate out.
+const activeSurfaces = new WeakMap<object, () => void>();
+
 // Preserve DOM identity: replacing the popup restarts its entrance animation.
 function syncTooltipNode(target: Node, source: Node) {
-  if (target.nodeType !== source.nodeType || target.nodeName !== source.nodeName) {
+  if (
+    target.nodeType !== source.nodeType ||
+    target.nodeName !== source.nodeName
+  ) {
     target.parentNode?.replaceChild(source.cloneNode(true), target);
     return;
   }
   if (source.nodeType === Node.TEXT_NODE) {
-    if (target.nodeValue !== source.nodeValue) target.nodeValue = source.nodeValue;
+    if (target.nodeValue !== source.nodeValue)
+      target.nodeValue = source.nodeValue;
     return;
   }
   if (source.nodeType === Node.ELEMENT_NODE) {
     const from = source as Element;
     const to = target as Element;
     for (const attribute of Array.from(to.attributes))
-      if (!from.hasAttribute(attribute.name)) to.removeAttribute(attribute.name);
+      if (!from.hasAttribute(attribute.name))
+        to.removeAttribute(attribute.name);
     for (const attribute of Array.from(from.attributes))
       if (to.getAttribute(attribute.name) !== attribute.value)
         to.setAttribute(attribute.name, attribute.value);
@@ -45,18 +57,25 @@ function syncTooltipNode(target: Node, source: Node) {
 // Only its visual surface is mirrored above native web content.
 export function TooltipSurface({
   source,
+  open,
 }: {
   source: RefObject<HTMLDivElement | null>;
+  open: boolean;
 }) {
   const pool = useContext(PoolContext);
+  const dismissRef = useRef<(() => void) | null>(null);
+  useLayoutEffect(() => {
+    if (!open) dismissRef.current?.();
+  }, [open]);
+  // Positioner refs are attached after child layout effects on the first mount.
   useEffect(() => {
     const node = source.current;
-    if (!pool || !node) return;
+    if (!pool || !node || !open) return;
+    activeSurfaces.get(pool)?.();
     const entry = pool.take(true);
     if (!entry) return;
     const doc = entry.window.document;
-    const opacity = node.style.opacity;
-    node.style.opacity = "0";
+    doc.body.replaceChildren();
     const syncTheme = () => {
       doc.documentElement.className = document.documentElement.className;
       doc.documentElement.style.colorScheme =
@@ -90,6 +109,16 @@ export function TooltipSurface({
     let previous = "";
     let frame = 0;
     let dismissed = false;
+    const dismiss = () => {
+      if (dismissed) return;
+      dismissed = true;
+      cancelAnimationFrame(frame);
+      if (activeSurfaces.get(pool) === dismiss) activeSurfaces.delete(pool);
+      if (!entry.window.closed) doc.body.replaceChildren();
+      pool.release(entry);
+    };
+    activeSurfaces.set(pool, dismiss);
+    dismissRef.current = dismiss;
     const changes = new MutationObserver(() => {
       dirty = true;
     });
@@ -101,12 +130,19 @@ export function TooltipSurface({
     });
     const unsubscribe = window.electronAPI.portal.onBlur((id) => {
       if (id === entry.id) {
-        dismissed = true;
-        window.electronAPI.portal.update(entry.id, null);
+        dismiss();
       }
     });
     const paint = () => {
       if (entry.window.closed || dismissed) return;
+      const popup = node.querySelector('[data-slot="tooltip-content"]');
+      if (
+        !popup?.hasAttribute("data-open") ||
+        getComputedStyle(node).visibility === "hidden"
+      ) {
+        frame = requestAnimationFrame(paint);
+        return;
+      }
       const rect = node.getBoundingClientRect();
       const bounds = {
         x: rect.x - 8,
@@ -146,24 +182,38 @@ export function TooltipSurface({
       theme.disconnect();
       styles.disconnect();
       unsubscribe();
-      node.style.opacity = opacity;
-      if (!entry.window.closed) doc.body.replaceChildren();
-      pool.release(entry);
+      dismiss();
+      if (dismissRef.current === dismiss) dismissRef.current = null;
     };
-  }, [pool, source]);
+  }, [pool, source, open]);
   return null;
 }
 
 export function Tooltip(props: ComponentProps<typeof Root>) {
-  return <Root disableHoverablePopup {...props} />;
+  const [open, setOpen] = useState(props.defaultOpen ?? false);
+  return (
+    <TooltipOpenContext.Provider value={props.open ?? open}>
+      <Root
+        disableHoverablePopup
+        {...props}
+        onOpenChange={(nextOpen, details) => {
+          props.onOpenChange?.(nextOpen, details);
+          if (!details.isCanceled) setOpen(nextOpen);
+        }}
+      />
+    </TooltipOpenContext.Provider>
+  );
 }
 export function TooltipContent(props: ComponentProps<typeof Content>) {
   const source = useRef<HTMLDivElement>(null);
+  const pool = useContext(PoolContext);
+  const open = useContext(TooltipOpenContext);
   return (
     <Content
       {...props}
+      hideSource={Boolean(pool)}
       positionerRef={source}
-      surface={<TooltipSurface source={source} />}
+      surface={<TooltipSurface source={source} open={open} />}
     />
   );
 }

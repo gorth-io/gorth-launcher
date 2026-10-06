@@ -1,5 +1,21 @@
 export type Page =
-  "home" | "library" | "downloads" | "accounts" | "settings" | "content";
+  | "home"
+  | "library"
+  | "downloads"
+  | "accounts"
+  | "settings"
+  | "settings/help"
+  | "content"
+  | "instance-data"
+  | "shortcuts"
+  | "mods"
+  | "modpacks"
+  | "resourcepacks"
+  | "shaders"
+  | "console"
+  | "gallery"
+  | "notifications"
+  | "settings/instance";
 export type AppMenuAction = Page | "new-instance";
 
 export interface Instance {
@@ -8,18 +24,49 @@ export interface Instance {
   version: string;
   loader: string;
   loaderVersion?: string | null;
+  iconData?: string | null;
+  group?: string | null;
   createdAt: number;
 }
 
 export interface Settings {
+  showTitlebarLogo?: boolean;
   memory: number;
   javaPath: string;
+  trashRetentionDays?: number;
+  keepSavesOnTrashCleanup?: boolean;
+}
+
+export interface TrashEntry extends Instance {
+  deletedAt: number;
+}
+
+export type GpuPreference = "default" | "high-performance" | "integrated";
+export interface InstanceSettings {
+  memoryMin: number;
+  memoryMax: number;
+  javaPath: string;
+  jvmArguments: string[];
+  resolutionWidth: number;
+  resolutionHeight: number;
+  fullscreen: boolean;
+  environment: Record<string, string>;
+  accountId: string | null;
+  joinServer: string;
+  joinWorld: string;
+  preLaunchCommand: string;
+  postExitCommand: string;
+  gpuPreference: GpuPreference;
+  openGlPath: string;
+  openAlPath: string;
+  glfwPath: string;
 }
 
 export interface LibrarySnapshot {
   instances: Instance[];
   settings: Settings;
-  trash: Instance[];
+  instanceSettings: Record<string, InstanceSettings>;
+  trash: TrashEntry[];
 }
 export type LibraryCommand =
   | {
@@ -31,6 +78,19 @@ export type LibraryCommand =
     }
   | { action: "rename" | "copy"; id: string; name: string }
   | { action: "delete" | "restore"; id: string }
+  | { action: "metadata"; id: string; group: string | null }
+  | {
+      action: "runtime";
+      id: string;
+      version: string;
+      loader: string;
+      loaderVersion?: string | null;
+    }
+  | { action: "icon"; id: string; iconData: string | null }
+  | { action: "trash.purge"; id: string; keepSaves: boolean }
+  | { action: "trash.cleanup" }
+  | { action: "orphans.import" }
+  | { action: "instance.settings"; id: string; settings: InstanceSettings }
   | { action: "settings"; settings: Settings }
   | { action: "migrate"; instances: Instance[]; settings: Settings };
 export interface LibraryResult {
@@ -55,7 +115,10 @@ export interface LauncherSessionView {
   name: string;
   email?: string;
   username?: string;
+  image?: string;
+  emailVerified?: boolean;
   expiresAt: number;
+  canRefresh?: boolean;
   needsLogin: boolean;
 }
 export interface AuthSnapshot {
@@ -77,6 +140,7 @@ export type AuthCommand =
   | {
       action:
         | "launcher.login"
+        | "launcher.register"
         | "launcher.unlock"
         | "launcher.logout"
         | "launcher.refresh"
@@ -98,6 +162,8 @@ export interface GameVersion {
 }
 export type GamePhase =
   | "idle"
+  | "queued"
+  | "paused"
   | "checking"
   | "downloading"
   | "ready"
@@ -105,6 +171,7 @@ export type GamePhase =
   | "running"
   | "stopping"
   | "cancelled"
+  | "crashed"
   | "error";
 export interface GameStatus {
   instanceId: string;
@@ -114,15 +181,32 @@ export interface GameStatus {
   completed: number;
   total: number;
   logs: string[];
+  speed: number;
+  eta: number | null;
+  queuePosition: number | null;
+  crashHint?: string;
+}
+export interface PlaySession {
+  id: string;
+  instanceId: string;
+  startedAt: number;
+  endedAt: number;
+  duration: number;
+  exitCode: number | null;
+  crashed: boolean;
 }
 export interface GameSnapshot {
   directory: string;
   jobs: GameStatus[];
   activeId: string | null;
+  activeIds: string[];
+  downloadingId: string | null;
+  queue: string[];
+  history: PlaySession[];
 }
 export type GameCommand =
-  | { action: "install" | "play"; instance: Instance; settings: Settings }
-  | { action: "cancel" | "stop"; id: string };
+  | { action: "install" | "play"; instance: Instance }
+  | { action: "cancel" | "stop" | "pause" | "resume"; id: string };
 
 export interface GameResult {
   ok: boolean;
@@ -149,6 +233,8 @@ export interface LauncherSession {
   name: string;
   email?: string;
   username?: string;
+  image?: string;
+  emailVerified?: boolean;
   tokens: Tokens;
 }
 export interface AuthData {

@@ -21,6 +21,8 @@ const authSchema = z.object({
       name: z.string(),
       email: z.string().optional(),
       username: z.string().optional(),
+      image: z.string().optional(),
+      emailVerified: z.boolean().optional(),
       tokens: tokensSchema,
     })
     .nullable(),

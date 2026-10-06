@@ -2,7 +2,11 @@ import { Box } from "lucide-react";
 import { useFullScreen } from "@/hooks/use-full-screen";
 import { cn } from "@/lib/utils";
 
-export function Titlebar() {
+interface TitlebarProps {
+  showLogo: boolean;
+}
+
+export function Titlebar({ showLogo }: TitlebarProps) {
   const isFullScreen = useFullScreen();
   return (
     <header
@@ -18,11 +22,8 @@ export function Titlebar() {
             : "w-0",
         )}
       />
-      <div className="flex items-center gap-2 px-4 text-sm font-medium">
-        <Box size={16} />
-        <span>
-          Gorth <span className="text-muted-foreground">Launcher</span>
-        </span>
+      <div className="flex items-center gap-2 p-2.5">
+        {showLogo && <Box className="size-5 text-violet-500" />}
       </div>
       {!window.electronAPI.windowState.isMacOS && (
         <div className="ml-auto w-36 shrink-0 bg-slate-700" />

@@ -1,10 +1,20 @@
+import { appUrl } from "@/lib/utils/environment";
 import { installPortal } from "@/main/windows/portal";
 import { installWebview } from "@/main/windows/webview";
 import { BrowserWindow, dialog, nativeTheme, screen } from "electron";
 import path from "node:path";
 import { readWindowState, trackWindowState } from "@/main/windows/state";
+let mainWindow: BrowserWindow | null = null;
 
 export function createWindow() {
+  // The launcher stores one window state. Reuse its one main window rather
+  // than letting activation/menu races create competing state writers.
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+    return mainWindow;
+  }
   const { isMaximized, ...bounds } = readWindowState();
   const window = new BrowserWindow({
     title: "Gorth Launcher",
@@ -29,6 +39,10 @@ export function createWindow() {
       webviewTag: true,
     },
   });
+  mainWindow = window;
+  window.once("closed", () => {
+    if (mainWindow === window) mainWindow = null;
+  });
   installPortal(window);
   installWebview(window);
   window.on("system-context-menu", (event, point) => {
@@ -42,8 +56,7 @@ export function createWindow() {
   });
   window.webContents.on("will-navigate", (event, url) => {
     if (
-      !MAIN_WINDOW_VITE_DEV_SERVER_URL ||
-      new URL(url).origin !== new URL(MAIN_WINDOW_VITE_DEV_SERVER_URL).origin
+      new URL(url).origin !== new URL(appUrl || MAIN_WINDOW_VITE_DEV_SERVER_URL).origin
     )
       event.preventDefault();
   });
@@ -62,9 +75,9 @@ export function createWindow() {
   const loadRenderer = async () => {
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        if (MAIN_WINDOW_VITE_DEV_SERVER_URL)
+        if (MAIN_WINDOW_VITE_DEV_SERVER_URL || appUrl)
           await window.loadURL(
-            new URL("assets/index.html", MAIN_WINDOW_VITE_DEV_SERVER_URL).href,
+      new URL("assets/index.html", appUrl || MAIN_WINDOW_VITE_DEV_SERVER_URL).href,
           );
         else
           await window.loadFile(

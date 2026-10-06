@@ -1,6 +1,12 @@
 import { Instance, Settings } from "@/lib/utils/interface";
 
-export const defaultSettings: Settings = { memory: 4, javaPath: "" };
+export const defaultSettings: Settings = {
+  showTitlebarLogo: true,
+  memory: 4,
+  javaPath: "",
+  trashRetentionDays: 30,
+  keepSavesOnTrashCleanup: true,
+};
 const instancesCookie = "launcher-instances";
 const settingsCookie = "launcher-settings";
 function readCookie(name: string): string | null {
@@ -52,6 +58,10 @@ export function readSettings(): Settings {
     const data = readJsonCookie(settingsCookie, {} as Partial<Settings>);
     const memory = data.memory;
     return {
+      showTitlebarLogo:
+        typeof data?.showTitlebarLogo === "boolean"
+          ? data.showTitlebarLogo
+          : true,
       memory:
         typeof memory === "number" &&
         Number.isInteger(memory) &&
@@ -60,6 +70,14 @@ export function readSettings(): Settings {
           ? memory
           : 4,
       javaPath: typeof data?.javaPath === "string" ? data.javaPath : "",
+      trashRetentionDays:
+        typeof data?.trashRetentionDays === "number"
+          ? Math.max(0, Math.min(365, Math.trunc(data.trashRetentionDays)))
+          : 30,
+      keepSavesOnTrashCleanup:
+        typeof data?.keepSavesOnTrashCleanup === "boolean"
+          ? data.keepSavesOnTrashCleanup
+          : true,
     };
   } catch {
     return defaultSettings;

@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import { mockAxiosResponses } from "./axios-fixture";
 import { test } from "node:test";
 import { createServer } from "node:http";
+import { createAdaptorServer } from "@hono/node-server";
+import { createAuthRoutes } from "@/routes/auth";
+import { Hono } from "hono";
 import { createHash } from "node:crypto";
 import { generateKeyPair, exportJWK, SignJWT } from "jose";
 import {
@@ -88,7 +92,7 @@ test("Gorth OIDC: PKCE, state, signature, issuer, audience, nonce, expiry, refre
   await new Promise<void>((r) => probe.close(() => r()));
   const server = createServer(async (req, res) => {
     res.setHeader("Content-Type", "application/json");
-    if (req.url === "/.well-known/openid-configuration") {
+    if (req.url === "/auth/.well-known/openid-configuration") {
       res.end(
         JSON.stringify({
           issuer,
@@ -101,29 +105,35 @@ test("Gorth OIDC: PKCE, state, signature, issuer, audience, nonce, expiry, refre
       );
       return;
     }
-    if (req.url === "/jwks") {
+    if (req.url === "/auth/jwks") {
       res.end(JSON.stringify({ keys: [jwk] }));
       return;
     }
-    if (req.url === "/userinfo") {
+    if (req.url === "/auth/userinfo") {
       assert.equal(req.headers.authorization, "Bearer private-access");
-      res.end(JSON.stringify({
-        sub: mode === "userinfo" ? "wrong-user" : "user-123",
-        name: "Gorth Player", email: "player@example.test", preferred_username: "player",
-      }));
+      res.end(
+        JSON.stringify({
+          sub: mode === "userinfo" ? "wrong-user" : "user-123",
+          name: "Gorth Player",
+          email: "player@example.test",
+          preferred_username: "player",
+        }),
+      );
       return;
     }
-    if (req.url === "/revoke") {
+    if (req.url === "/auth/revoke") {
       let body = "";
       for await (const chunk of req) body += chunk;
       const form = new URLSearchParams(body);
       assert.equal(form.get("client_id"), "gorth-launcher");
-      assert(["private-access", "private-refresh"].includes(form.get("token")!));
+      assert(
+        ["private-access", "private-refresh"].includes(form.get("token")!),
+      );
       revoked.push(form.get("token_type_hint")!);
       res.writeHead(200).end();
       return;
     }
-    if (req.url === "/token") {
+    if (req.url === "/auth/token") {
       let body = "";
       for await (const chunk of req) body += chunk;
       const form = new URLSearchParams(body);
@@ -137,8 +147,22 @@ test("Gorth OIDC: PKCE, state, signature, issuer, audience, nonce, expiry, refre
         );
       }
       const jwt = await new SignJWT({
-        at_hash: mode === "at_hash" ? "invalid" : createHash("sha256").update("private-access").digest().subarray(0, 16).toString("base64url"),
-        c_hash: mode === "c_hash" ? "invalid" : createHash("sha256").update("test-code").digest().subarray(0, 16).toString("base64url"),
+        at_hash:
+          mode === "at_hash"
+            ? "invalid"
+            : createHash("sha256")
+                .update("private-access")
+                .digest()
+                .subarray(0, 16)
+                .toString("base64url"),
+        c_hash:
+          mode === "c_hash"
+            ? "invalid"
+            : createHash("sha256")
+                .update("test-code")
+                .digest()
+                .subarray(0, 16)
+                .toString("base64url"),
         name: "Gorth Player",
         nonce: mode === "nonce" ? "wrong" : current.searchParams.get("nonce"),
       })
@@ -181,13 +205,25 @@ test("Gorth OIDC: PKCE, state, signature, issuer, audience, nonce, expiry, refre
     res.writeHead(404).end("{}");
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-  issuer = "http://127.0.0.1:" + (server.address() as { port: number }).port;
-  process.env.GORTH_SSO_ISSUER = issuer;
-  process.env.GORTH_SSO_REDIRECT_URI =
-    "http://127.0.0.1:" + callbackPort + "/auth/callback";
-  process.env.GORTH_GAME_AUTH_URL = issuer + "/game";
+  const origin =
+    "http://127.0.0.1:" + (server.address() as { port: number }).port;
+  issuer = origin + "/auth";
+  process.env.VITE_SSO_CLIENT_URL = origin;
+  process.env.VITE_SSO_SERVER_URL = origin;
+  process.env.VITE_SSO_OAUTH_CLIENT_ID = "gorth-launcher";
+  process.env.VITE_APP_URL = "http://127.0.0.1:" + callbackPort;
+  // Metadata carries issuer-qualified endpoint paths, matching Better Auth.
+  process.env.GORTH_GAME_AUTH_URL = origin + "/game";
   process.env.ELY_CLIENT_ID = "test-ely-client";
-  const { loginGorth, refreshGorth, revokeGorth } = await import("../lib/auth/gorth");
+  const { loginGorth, refreshGorth, revokeGorth } =
+    await import("../lib/auth/gorth");
+  const callbackServer = createAdaptorServer({
+    fetch: new Hono().route("/auth", createAuthRoutes()).fetch,
+  });
+  await new Promise<void>((resolve, reject) => {
+    callbackServer.once("error", reject);
+    callbackServer.listen(callbackPort, "127.0.0.1", resolve);
+  });
   const open = async (value: string) => {
     current = new URL(value);
     assert.equal(current.searchParams.get("code_challenge_method"), "S256");
@@ -201,16 +237,51 @@ test("Gorth OIDC: PKCE, state, signature, issuer, audience, nonce, expiry, refre
   };
   try {
     const session = await loginGorth(open, new AbortController().signal);
+    assert.equal(
+      current.searchParams.has("prompt"),
+      false,
+      "Normal login must not force a fresh SSO login or loop an existing session",
+    );
     assert.equal(session.id, "user-123");
     assert.equal(session.email, "player@example.test");
     assert.equal(session.username, "player");
+    const registered = await loginGorth(
+      async (value, receiveCallback) => {
+        current = new URL(value);
+        assert.equal(current.searchParams.get("prompt"), "create");
+        assert.equal(current.searchParams.get("code_challenge_method"), "S256");
+        const callback = new URL(current.searchParams.get("redirect_uri")!);
+        callback.searchParams.set("code", "test-code");
+        callback.searchParams.set("state", "wrong-state");
+        assert.equal(receiveCallback(callback.href), false);
+        callback.searchParams.set("state", current.searchParams.get("state")!);
+        assert.equal(receiveCallback(callback.href), true);
+        assert.equal(
+          receiveCallback(callback.href),
+          false,
+          "Embedded callback is single-use",
+        );
+      },
+      new AbortController().signal,
+      "register",
+    );
+    assert.equal(registered.id, session.id);
     await revokeGorth(session.tokens, new AbortController().signal);
     assert.deepEqual(revoked.sort(), ["access_token", "refresh_token"]);
     assert.equal(
       (await refreshGorth(session, new AbortController().signal)).id,
       session.id,
     );
-    for (mode of ["nonce", "issuer", "audience", "expired", "signature", "at_hash", "c_hash", "userinfo"])
+    for (mode of [
+      "nonce",
+      "issuer",
+      "audience",
+      "expired",
+      "signature",
+      "at_hash",
+      "c_hash",
+      "userinfo",
+    ])
       await assert.rejects(
         loginGorth(open, new AbortController().signal),
         Error,
@@ -219,14 +290,17 @@ test("Gorth OIDC: PKCE, state, signature, issuer, audience, nonce, expiry, refre
     mode = "subject";
     await assert.rejects(refreshGorth(session, new AbortController().signal));
     mode = "valid";
-    await assert.rejects(loginGorth(async (value) => {
-      const url = new URL(value);
-      const callback = new URL(url.searchParams.get("redirect_uri")!);
-      callback.searchParams.set("state", url.searchParams.get("state")!);
-      callback.searchParams.set("code", "test-code");
-      callback.searchParams.set("iss", "https://wrong.example");
-      assert.equal((await fetch(callback)).status, 400);
-    }, new AbortController().signal), /issuer mismatch/);
+    await assert.rejects(
+      loginGorth(async (value) => {
+        const url = new URL(value);
+        const callback = new URL(url.searchParams.get("redirect_uri")!);
+        callback.searchParams.set("state", url.searchParams.get("state")!);
+        callback.searchParams.set("code", "test-code");
+        callback.searchParams.set("iss", "https://wrong.example");
+        assert.equal((await fetch(callback)).status, 400);
+      }, new AbortController().signal),
+      /issuer mismatch/,
+    );
     const controller = new AbortController();
     await assert.rejects(
       loginGorth(async () => {
@@ -277,36 +351,44 @@ test("Gorth OIDC: PKCE, state, signature, issuer, audience, nonce, expiry, refre
     };
     try {
       const { loginEly, refreshEly } = await import("../lib/auth/ely");
-      const ely = await loginEly(
-        async (url) => {
-          assert.equal(url, "https://account.ely.by/device");
-        },
-        (code) => {
-          exposedCode = code;
-        },
-        new AbortController().signal,
-      );
-      assert.equal(exposedCode, "ABCD-EFGH");
-      assert.equal(ely.provider, "ely");
-      assert.equal(polls, 1);
-      assert.equal(
-        (await refreshEly(ely, new AbortController().signal)).uuid,
-        ely.uuid,
-      );
-      const abort = new AbortController();
-      await assert.rejects(
-        loginEly(
-          async () => {
-            abort.abort();
+      const restoreAxios = mockAxiosResponses();
+      try {
+        const ely = await loginEly(
+          async (url) => {
+            assert.equal(url, "https://account.ely.by/device");
           },
-          () => {},
-          abort.signal,
-        ),
-      );
+          (code) => {
+            exposedCode = code;
+          },
+          new AbortController().signal,
+        );
+        assert.equal(exposedCode, "ABCD-EFGH");
+        assert.equal(ely.provider, "ely");
+        assert.equal(polls, 1);
+        assert.equal(
+          (await refreshEly(ely, new AbortController().signal)).uuid,
+          ely.uuid,
+        );
+        const abort = new AbortController();
+        await assert.rejects(
+          loginEly(
+            async () => {
+              abort.abort();
+            },
+            () => {},
+            abort.signal,
+          ),
+        );
+      } finally {
+        restoreAxios();
+      }
     } finally {
       globalThis.fetch = realFetch;
     }
   } finally {
+    callbackServer.close();
+    if ("closeAllConnections" in callbackServer)
+      callbackServer.closeAllConnections();
     server.closeAllConnections();
     await new Promise<void>((r) => server.close(() => r()));
   }

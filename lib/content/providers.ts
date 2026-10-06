@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { fetcher } from "@/lib/utils/fetcher";
+import axios from "axios";
 import { curseforgeClasses, curseforgePaths, projectWebsite } from "./website";
 import { curseforgeApiKey } from "@/lib/utils/environment";
 import type {
@@ -24,29 +26,33 @@ export async function providerJson<T>(
     throw new Error(
       "CurseForge cần CURSEFORGE_API_KEY trong môi trường main process. Xem .env.example và khởi động lại launcher.",
     );
-  const result = await fetch(
-    (provider === "modrinth"
-      ? "https://api.modrinth.com/v2"
-      : "https://api.curseforge.com/v1") + route,
-    {
-      signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
+  try {
+    const result = await fetcher<T>({
+      method: "GET",
+      url:
+        (provider === "modrinth"
+          ? "https://api.modrinth.com/v2"
+          : "https://api.curseforge.com/v1") + route,
+      signal,
+      timeout: 30_000,
       redirect: "error",
       headers: {
         "User-Agent": "GorthLauncher/0.0.0",
         ...(provider === "curseforge" ? { "x-api-key": curseforgeApiKey } : {}),
       },
-    },
-  );
-  if (!result.ok)
+    });
+    return result.data;
+  } catch (error) {
+    if (!axios.isAxiosError(error) || !error.response) throw error;
     throw new Error(
       provider +
         " HTTP " +
-        result.status +
-        (result.status === 429
+        error.response.status +
+        (error.response.status === 429
           ? ": quá nhiều yêu cầu, hãy thử lại sau."
           : ": không lấy được dữ liệu."),
     );
-  return result.json() as Promise<T>;
+  }
 }
 const mrVersion = z.object({
   id: z.string(),
@@ -93,8 +99,7 @@ function compatibleMr(value: z.infer<typeof mrVersion>, query: ContentQuery) {
   return (
     value.version_type === "release" &&
     value.game_versions.includes(query.version) &&
-    (query.kind === "shader" ||
-      query.kind === "resourcepack" ||
+    (["shader", "resourcepack", "datapack"].includes(query.kind) ||
       value.loaders.includes(query.loader.toLowerCase()))
   );
 }
@@ -103,8 +108,7 @@ function compatibleCf(value: z.infer<typeof cfFile>, query: ContentQuery) {
     value.isAvailable &&
     value.releaseType === 1 &&
     value.gameVersions.includes(query.version) &&
-    (query.kind === "shader" ||
-      query.kind === "resourcepack" ||
+    (["shader", "resourcepack", "datapack"].includes(query.kind) ||
       value.gameVersions.some(
         (item) => item.toLowerCase() === query.loader.toLowerCase(),
       ))
@@ -278,7 +282,9 @@ export async function resolveContentFile(
           ? "shaderpacks"
           : query.kind === "resourcepack"
             ? "resourcepacks"
-            : "mods",
+            : query.kind === "datapack"
+              ? "datapacks"
+              : "mods",
       artifact: {
         url: file.url,
         sha1: file.hashes.sha1,
@@ -291,6 +297,9 @@ export async function resolveContentFile(
           projectId: d.project_id ?? undefined,
           versionId: d.version_id ?? undefined,
         })),
+      conflicts: v.dependencies
+        .filter((d) => d.dependency_type === "incompatible")
+        .flatMap((d) => (d.project_id ? [d.project_id] : [])),
     };
   }
   const result = await providerJson<{ data: unknown }>(
@@ -311,7 +320,7 @@ export async function resolveContentFile(
     (!pinnedPackFile && !compatibleCf(v, query)) ||
     !v.isAvailable ||
     !(
-      pinnedPackFile ? [6, 12, 6552] : [curseforgeClasses[query.kind]]
+      pinnedPackFile ? [6, 12, 6552, 6945] : [curseforgeClasses[query.kind]]
     ).includes(project.data.classId)
   )
     throw new Error("File CurseForge không tương thích hoặc không khả dụng.");
@@ -336,11 +345,16 @@ export async function resolveContentFile(
         ? "resourcepacks"
         : project.data.classId === 6552
           ? "shaderpacks"
-          : "mods",
+          : project.data.classId === 6945
+            ? "datapacks"
+            : "mods",
     artifact: { url: v.downloadUrl, sha1, size: v.fileLength },
     required: v.dependencies
       .filter((d) => d.relationType === 3)
       .map((d) => ({ projectId: String(d.modId) })),
+    conflicts: v.dependencies
+      .filter((d) => d.relationType === 5)
+      .map((d) => String(d.modId)),
   };
 }
 export async function resolveMods(

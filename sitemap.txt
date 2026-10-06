@@ -1,7 +1,173 @@
 launcher
 browser
 
-Kết luận
+Gorth hiện mạnh hơn Dawn về quản lý instance, nội dung, bảo mật và kiểm thử. Dawn có cấu trúc backend dễ theo dõi hơn ở một số phần, cùng những tiện ích tải xuống và cấu hình đáng học. Cả hai chưa nên được coi là launcher production hoàn thiện.
+Đánh giá này dựa trên source Gorth hiện tại và bản Dawn trong packages, không phải benchmark tốc độ hay kiểm thử chơi game trên cả ba hệ điều hành. Tôi không thay đổi code trong lần đối chiếu này.
+1. So sánh tổng thể
+| Hạng mục | Gorth Launcher | Dawn Launcher |
+|---|---|---|
+| Công nghệ | Electron Forge, Vite, React, TypeScript, shadcn | electron-vite, electron-builder, React, TypeScript, UI custom |
+| Database | SQLite/Drizzle, migration và transaction | Class `JsonDatabase` tự viết |
+| Chạy Minecraft | Backend tải và chạy thật | Backend tải và chạy thật |
+| Phiên bản | Release từ 1.7.10, loader được tuyển chọn | Catalog release/snapshot, loader linh hoạt hơn |
+| Loader | Fabric, Forge, NeoForge | Fabric, Forge, NeoForge, Quilt |
+| Java | Temurin theo metadata, kiểm tra runtime | Quét Java hệ thống và tải từ Adoptium |
+| Account game | Offline hoạt động; Ely/Gorth online chưa bật | Offline và Microsoft có implementation |
+| Account launcher | Gorth SSO riêng | Không thấy hệ thống tương đương |
+| Instance settings | Nhiều tùy chọn nâng cao | RAM, Java path, resolution và metadata cơ bản |
+| Xóa instance | Trash, restore, retention, giữ saves | Xóa trực tiếp thư mục |
+| Nội dung | Inventory, update, dependency guards, datapack | List, import, toggle, remove; cài marketplace |
+| Modpack | Import và update có giữ file người dùng sửa | Có installer, nhưng còn giới hạn đáng kể |
+| World/data | Backup/restore, servers, notes, logs | Gallery screenshot; quản lý world chưa tương đương |
+| Process/download | Multi-instance, queue, pause/resume, ETA | Multi-instance; download song song, thiếu điều khiển queue tương đương |
+| Kiểm thử | Nhiều test nghiệp vụ và Electron | `verify` chủ yếu kiểm tra cấu trúc file |
+| Phát hành | Forge makers và security fuses | Builder: NSIS, DMG, AppImage, DEB |
+Microsoft, Quilt và snapshot là khác biệt về phạm vi sản phẩm, không phải thiếu sót của Gorth theo yêu cầu bạn đã đặt.
+2. Kiến trúc và lưu trữ
+Gorth có nền tảng dữ liệu tốt hơn, đặc biệt khi nhiều thao tác cùng cập nhật instance, lịch sử và settings. SQLite hỗ trợ transaction; code library còn xử lý phục hồi thao tác filesystem bị gián đoạn. Nguồn: [library-store.ts (line 130)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/services/library-store.ts:130).
+Dawn chia backend thành các service rõ tên: InstanceService, DownloadManager, JavaService, MinecraftService và các bước chuẩn bị launch riêng. Đây là điểm dễ đọc và đáng học.
+Nhưng JsonDatabase của Dawn có hai rủi ro:
+- Không thấy cơ chế serialize các lần mutate() đồng thời; có khả năng ghi đè thay đổi của nhau.
+- read() bắt mọi lỗi rồi ghi database mặc định, nên JSON hỏng hoặc lỗi đọc có thể dẫn đến thay dữ liệu cũ bằng dữ liệu mới.
+Ghi .tmp rồi rename giúp tránh file ghi dở, không thay thế transaction hoặc khóa cập nhật. Nguồn: [JsonDatabase.ts (line 6)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/packages/dawn-launcher/src/launcher/JsonDatabase.ts:6).
+Gorth cũng còn nợ kiến trúc: [app/index.tsx](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/app/index.tsx) gần 930 dòng; một số module vừa chứa nghiệp vụ vừa đăng ký IPC. Cần tách theo tính năng, không nhất thiết chuyển sang class như Dawn.
+3. Tải và chạy game
+Hai bên đều triển khai tải client, libraries, assets, natives và chạy process Java thật.
+Gorth ưu tiên tính toàn vẹn: file tải cần checksum, cache được kiểm tra hash, nguồn tải có allowlist. Dawn linh hoạt hơn: số luồng tải có thể cấu hình, có fallback URL, timeout kết nối/idle và backoff. Gorth hiện dùng 8 worker tải file; Dawn mặc định 16. Không thể chỉ từ số worker kết luận Dawn nhanh hơn.
+Điểm cần cảnh báo ở Dawn:
+- Cache thường được chấp nhận theo size/tên hash thay vì đọc lại checksum.
+- Assets có budget tải khoảng 90 giây; hết budget vẫn có thể tiếp tục launch khi thiếu assets, kể cả khi bật tải trước launch.
+Cách này giảm thời gian chờ nhưng có thể gây thiếu âm thanh hoặc tài nguyên. Nguồn: [DownloadManager.ts (line 221)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/packages/dawn-launcher/src/launcher/DownloadManager.ts:221), [AssetSyncService.ts (line 78)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/packages/dawn-launcher/src/minecraft/launch/AssetSyncService.ts:78).
+Gorth còn thiếu resume theo byte bằng HTTP Range, queue tồn tại qua restart và kiểm thử process tree đa nền tảng.
+4. Instance và dữ liệu người chơi
+Gorth vượt rõ ở chiều sâu quản lý:
+- RAM min/max, JVM arguments, environment, fullscreen.
+- Default account, join server/world, pre-launch/post-exit.
+- GPU và đường dẫn thư viện native.
+- Nhóm, icon, Trash/restore và phục hồi saves.
+- World backup/restore, notes, server list, screenshot, log/crash report.
+Dawn có ưu thế thực dụng: cho đổi minecraftRoot, instance có gameDir riêng, favorite và banner. Gorth hiện còn gắn thư mục game với root dữ liệu ứng dụng.
+Dawn xóa instance trực tiếp; import ZIP còn gọi giải nén với maintainEntryPath=false, có nguy cơ làm phẳng các thư mục con. Export/import của Gorth rộng hơn nhưng chưa bảo toàn đầy đủ settings, nhóm và icon. Nguồn: [InstanceService.ts (line 109)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/packages/dawn-launcher/src/launcher/InstanceService.ts:109), [archive.ts (line 161)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/lib/instance/archive.ts:161).
+5. Mod, modpack và dependency
+Gorth tiến xa hơn về quản lý sau cài đặt: theo dõi nguồn/version, phát hiện update, cập nhật có kiểm tra checksum/dependency, datapack, hỗ trợ Iris và cập nhật modpack giữ thay đổi của người dùng.
+Dawn có cài Modrinth/CurseForge thật, nhưng:
+- Modrinth chọn versions[0], không thấy lọc release rõ ràng tại bước này.
+- Dependency chủ yếu theo project_id; chưa xử lý đầy đủ version pin và incompatibility.
+- Installer CurseForge modpack chỉ copy overrides/ và mods/; không thấy tải danh sách mod được tham chiếu trong manifest.json. Đây là hạn chế lớn với pack CurseForge chuẩn.
+- MRPack chưa xử lý đầy đủ các điều kiện client/server như Gorth.
+Nguồn: [MarketplaceService.ts (line 202)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/packages/dawn-launcher/src/api/MarketplaceService.ts:202).
+Tuy nhiên Gorth cũng chưa phải mod dependency resolver hoàn chỉnh: mod JAR bên ngoài, constraint phức tạp và đổi runtime vẫn cần xử lý thêm.
+6. Auth và bảo mật
+Gorth có nền tảng bảo mật tốt hơn: sandbox renderer, xác thực sender IPC, validation, giới hạn đường dẫn/nguồn tải, mã hóa credential và SSO có PKCE/state/nonce.
+Nhưng cần nói chính xác: SSO launcher không đồng nghĩa đã có online game auth. Source hiện vẫn đặt ely: false và gorthGame: false. Nguồn: [auth/service.ts (line 81)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/lib/auth/service.ts:81).
+Dawn có Microsoft device flow và refresh Minecraft account, nhưng token được lưu trong JSON. Một số IPC nhận trực tiếp URL/path; ContentService.remove() xóa path nhận từ renderer mà không thấy kiểm tra nó thuộc instance. Renderer cũng đặt sandbox: false.
+Đây là các rủi ro cần sửa trước khi dùng Dawn làm nền tảng phát hành. Nguồn: [AccountService.ts (line 324)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/packages/dawn-launcher/src/launcher/AccountService.ts:324), [ContentService.ts (line 74)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/packages/dawn-launcher/src/launcher/ContentService.ts:74), [main.ts (line 95)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/packages/dawn-launcher/src/electron/main.ts:95).
+7. UI, kiểm thử và phát hành
+Dawn có gallery theo dõi screenshot bằng filesystem watcher, log ứng dụng có rotation và nhiều tùy chọn giao diện. Gorth có trải nghiệm đồng bộ với Browser, webview detail và quản lý instance sâu hơn. Chưa có đo đạc để kết luận bên nào nhẹ hơn.
+Không nên tính mọi checkbox/type là tính năng hoàn thành:
+- Dawn có discordRpc, nhưng chưa thấy implementation RPC.
+- PluginService chỉ list/toggle metadata, chưa phải plugin runtime.
+- Có dependency electron-updater, nhưng chưa thấy wiring updater trong source.
+Về kiểm chứng, Gorth có lợi thế lớn: test auth, download, dependency, modpack, filesystem, migration và UI Electron. Dawn verify chỉ kiểm tra file bắt buộc và parse package.json, không chứng minh game chạy đúng. Nguồn: [verify-project.mjs](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/packages/dawn-launcher/scripts/verify-project.mjs).
+Cả hai vẫn cần signing/notarization, updater thực sự, CI và kiểm thử bản đóng gói đa nền tảng.
+Kết luận và ưu tiên
+Nên tiếp tục phát triển Gorth, không chuyển nền tảng sang Dawn. Những điểm đáng học từ Dawn là:
+1. Cho chọn thư mục Minecraft/instance ở ổ khác.
+2. Cấu hình concurrency, timeout và fallback tải xuống.
+3. Log ứng dụng có rotation, screenshot watcher.
+4. Chia pipeline launch thành các module nhỏ rõ trách nhiệm.
+Ưu tiên hoàn thiện Gorth: online game auth → bảo toàn export/import → queue/session log bền → bảo vệ world khi đổi runtime → phát hành và kiểm thử đa nền tảng.
+Gorth hiện có bộ chức năng sâu hơn; điều còn thiếu chủ yếu là độ bền, khả năng tương thích và bằng chứng hoạt động end-to-end, không phải thêm thật nhiều trang giao diện.
+
+
+
+
+
+
+
+
+
+Báo cáo cập nhật ngày 2026-10-04: xem docs/launcher-audit.md. Các audit bên dưới có phần lịch sử đã lỗi thời; báo cáo mới phân biệt tính năng đã triển khai và giới hạn chưa kiểm thử.
+
+Sitemap.txt hiện đã lỗi thời khá nhiều. Launcher không còn chỉ là Vanilla MVP: phần SQLite, quản lý instance, Java runtime, mod loader và Modrinth/CurseForge đã được triển khai.
+So với mục tiêu trong sitemap, các phần còn thiếu thực sự như sau.
+P0 — cần hoàn thiện trước khi phát hành
+1. Auth game online chưa hoạt động
+   - Game hiện chỉ chơi bằng tài khoản Offline.
+   - Ely.by và Gorth Game vẫn bị khóa cứng trong service.
+   - Gorth Game chưa có backend token/Yggdrasil tương ứng.
+   - Gorth SSO cho launcher đã có code nhưng vẫn cần đăng ký OAuth client thật và kiểm thử live.
+   - Ely.by chưa được kiểm thử skin/session thực tế.
+Bằng chứng: [service.ts (line 65)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/lib/auth/service.ts:65), [auth.md (line 3)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/docs/auth.md:3).
+Ngoài ra, [game.md (line 15)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/docs/game.md:15) nói Ely.by/Gorth được hỗ trợ, trong khi implementation hiện đang vô hiệu hóa chúng. Tài liệu này cần được đồng bộ.
+2. Quy trình phát hành production
+Hiện còn thiếu:
+- Đổi version khỏi 0.0.0.
+- Code signing Windows.
+- Code signing và notarization macOS.
+- Auto update.
+- Release channel stable/beta.
+- Kiểm tra chữ ký bản cập nhật và rollback.
+- CI build/test trên Windows, macOS ARM/Intel và Linux.
+- Crash reporter và diagnostic bundle.
+Forge hiện mới tạo được Squirrel/ZIP/DEB/RPM: [forge.config.ts (line 26)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/forge.config.ts:26), [package.json (line 4)](/Users/macbook/Projects/JetBrains/WebstormProjects/gorth-launcher/package.json:4).
+P1 — những phần quan trọng của launcher đầy đủ
+--3. Cài đặt riêng cho từng instance — đã hoàn thành
+Mỗi instance đã có RAM min/max, JVM arguments, Java runtime, độ phân giải/fullscreen, environment variables, tài khoản mặc định, direct server/world, pre-launch/post-exit command, GPU preference và đường dẫn OpenGL/OpenAL/GLFW riêng. Cấu hình được validate và lưu trong SQLite; main process đọc lại trước khi chạy game.
+--4. Quản lý nội dung đã cài — đã hoàn thành
+Trang Mod & modpack đã có inventory theo instance cho mod, resource pack, shader, data pack theo world và modpack. Nội dung do launcher quản lý có thể bật/tắt/xóa/cập nhật; update được phát hiện từ release tương thích mới nhất. Dependency bắt buộc, dependency ngược, phiên bản xung đột, khai báo incompatible, filename và checksum đều được kiểm tra. Cài shader tự cài Iris cùng dependency cho Fabric/NeoForge. Modpack online lưu manifest checksum và khi cập nhật chỉ thay file còn nguyên bản, giữ file người dùng đã chỉnh sửa.
+--5. Quản lý world và dữ liệu instance — đã hoàn thành phạm vi P1-5
+Trang Dữ liệu instance đã có danh sách world, backup/restore an toàn (tự backup world hiện tại trước khi restore), xóa world/backup, quản lý screenshots, đọc `servers.dat`, ghi chú riêng, xem log thường/log nén/crash report và xuất ZIP tương thích Prism/MultiMC. Import nhận ZIP hoặc thư mục Prism/MultiMC và FTB, kiểm tra archive, symlink, kích thước và runtime ổn định trước khi nhập nguyên tử vào thư viện. `.mrpack` và CurseForge ZIP tiếp tục dùng luồng import modpack hiện có.
+Packwiz, ATLauncher và Technic nằm ngoài phạm vi P1-5 này.
+--6. Vòng đời instance nâng cao — đã hoàn thành
+Instance hỗ trợ icon PNG/JPEG/WebP riêng, nhóm/folder và lọc theo nhóm, desktop shortcut mở thẳng luồng Play, đổi Minecraft/runtime loader ổn định mà vẫn giữ saves/mod/config, cùng export ZIP instance/modpack tương thích Prism/MultiMC. Trash ghi thời điểm xóa, cho khôi phục, xóa vĩnh viễn, giữ saves vào `minecraft/recovered-saves`, dọn thủ công hoặc tự động theo số ngày cấu hình. Launcher cũng quét thư mục instance mồ côi và chỉ import thư mục có `installed.json` hợp lệ với runtime còn được hỗ trợ.
+--7. Download và process manager nâng cao — đã triển khai, còn giới hạn production trong docs/launcher-audit.md
+Game service dùng scheduler theo instance: download/install chạy qua hàng đợi tuần tự để tránh tranh chấp cache, nhưng các process Minecraft đã khởi động có thể chạy đồng thời. Tác vụ tải có pause/resume/cancel, vị trí hàng đợi, tốc độ file/giây và ETA; file hoàn tất được tái sử dụng khi tiếp tục. Trang Tải xuống có console riêng tìm kiếm/lọc ERROR/WARN/INFO và xuất `.log`. Exit code bất thường được đánh dấu crash và phân tích các nhóm lỗi RAM, dependency/mod, Java, GPU/OpenGL và Mixin. Lịch sử tối đa 1.000 phiên cùng tổng thời gian chơi được lưu trong SQLite settings.
+P2 — hoàn thiện trải nghiệm
+Còn thiếu hoặc chưa thấy implementation đầy đủ:
+- Quản lý/upload/delete skin.
+- Minecraft news feed.
+- Đa ngôn ngữ.
+- Proxy tùy chỉnh.
+- Discord Rich Presence.
+- Copy screenshot vào clipboard.
+- Tích hợp profiler ngoài.
+- Deep link để cài modpack.
+- Backup/restore toàn bộ launcher.
+- Kiểm tra dung lượng đĩa trước khi tải.
+- Accessibility hoàn chỉnh.
+- Kiểm thử keyboard navigation đầy đủ.
+Keyboard shortcuts cơ bản đã có, vì vậy mục này chỉ còn phần accessibility tổng thể.
+Những mục trong sitemap đã hoàn thành
+Các mục sau nên được đánh dấu hoàn thành hoặc viết lại:
+- SQLite/Drizzle đã chạy thật.
+- Migration dữ liệu cũ đã có.
+- Đổi tên/copy/xóa/restore instance đã có.
+- Trash có khả năng phục hồi qua restart.
+- Java 8/17/21/25 được chọn theo metadata.
+- Vanilla release từ 1.7.10 trở lên.
+- Không hiển thị snapshot.
+- Fabric, Forge và NeoForge curated đã chạy được.
+- Modrinth và CurseForge đã tích hợp.
+- Import .mrpack và CurseForge ZIP đã có.
+- Mod dependency cơ bản đã có.
+- Webview project và dialog cài modpack đã có.
+- Hủy download, retry, checksum và cache đã có.
+Không nên tính Microsoft và Quilt là tính năng thiếu vì đây là giới hạn sản phẩm có chủ đích.
+Thứ tự nên làm tiếp
+1. Hoàn thành Ely.by và Gorth Game auth.
+--2. Thêm settings riêng cho từng instance.
+--3. Xây trang quản lý nội dung đã cài.
+4. Thêm cập nhật mod/modpack và export/import instance.
+5. Hoàn thiện Trash, orphan detection và disk cleanup.
+6. Thêm crash detection, play history và console.
+7. Sau cùng triển khai signing, notarization, updater và CI release.
+Đây là audit mã nguồn, không có file nào được thay đổi và không chạy lại toàn bộ test suite.
+
+
+
+
+
 Launcher hiện tại đã là một Vanilla launcher MVP hoạt động được: tải/kiểm tra file, tự cài Temurin 17, chạy Minecraft 1.20.1, quản lý Offline/Ely.by/Gorth, hiển thị tiến trình và dừng game.
 So với PrismLauncher/FreesmLauncher/PineconeMC, phần còn thiếu lớn nhất không nằm ở giao diện mà ở quản lý instance, mod loader/modpack, lưu trữ dữ liệu và phát hành production.
 Ưu tiên P0 — cần trước khi phát hành beta

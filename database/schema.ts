@@ -17,6 +17,8 @@ export const instances = sqliteTable(
     version: text("version").notNull(),
     loader: text("loader").notNull(),
     loaderVersion: text("loader_version"),
+    iconData: text("icon_data"),
+    group: text("group_name"),
     createdAt: integer("created_at").notNull(),
   },
   (table) => [index("instances_created_at_idx").on(table.createdAt)],
@@ -71,3 +73,15 @@ export const launcherSession = sqliteTable(
   },
   (table) => [check("launcher_session_singleton_check", sql`${table.id} = 1`)],
 );
+
+/** Public SSO identity cache, separate from browser profiles/game accounts. */
+export const userProfiles = sqliteTable("user_profiles", {
+  ssoUserId: text("sso_user_id").primaryKey().notNull(),
+  name: text("name").notNull(),
+  username: text("username"),
+  email: text("email"),
+  image: text("image"),
+  emailVerified: integer("email_verified", { mode: "boolean" }),
+  createdAt: integer("created_at").notNull(),
+  syncedAt: integer("synced_at").notNull(),
+});

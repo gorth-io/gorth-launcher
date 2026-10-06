@@ -1,47 +1,45 @@
-import { supportedLoader } from "@/lib/game/catalog";
-import { ContentPage } from "@/pages/content";
-import { Fragment, useEffect, useRef, useState } from "react";
 import {
-  Box,
-  Download,
-  Gamepad2,
-  Home,
-  Info,
-  Layers,
-  Plus,
-  Settings2,
-  Trash2,
-  UserRound,
-  X,
-} from "lucide-react";
+  loaderCatalog as supportedLoaderCatalog,
+  supportedLoader,
+} from "@/lib/game/catalog";
+import { ContentPage } from "@/pages/content";
+import { ConsolePage } from "@/pages/console";
+import { GalleryPage } from "@/pages/gallery";
+import { NotificationsPage } from "@/pages/notifications";
+import { InstancePreferencesPage } from "@/pages/settings/instance";
+import { useNotifications } from "@/hooks/use-notifications";
+import { ShortcutsPage } from "@/pages/shortcuts";
+import { HelpPage } from "@/pages/settings/help";
+import { useEffect, useRef, useState } from "react";
+import { Dashboard } from "@/layouts/dashboard";
+import { navigation } from "@/components/dashboard/navigation-data";
+import { Gamepad2, Info, Image, Link, Plus, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from "@/components/ui/native-select";
 import { CreateInstanceForm } from "@/components/form/create-instance-form";
 import { InstanceNameForm } from "@/components/form/instance-name-form";
+import { InstanceSettingsForm } from "@/components/form/instance-settings-form";
 import { useLibrary } from "@/hooks/use-library";
 import { LoadingScreen } from "@/components/element/loading-screen";
-import { Card, CardTitle } from "@/components/ui/card";
-import {
-  SidebarProvider,
-  Sidebar,
-  SidebarHeader,
-  SidebarContent,
-  SidebarFooter,
-  SidebarMenu,
-  SidebarMenuItem,
-  SidebarMenuButton,
-  SidebarMenuBadge,
-  SidebarSeparator,
-} from "@/components/ui/sidebar";
+import { SidebarProvider } from "@/components/ui/sidebar";
 import {
   AccountsPage,
   DownloadsPage,
   HomePage,
   LibraryPage,
+  InstanceDataPage,
   SettingsPage,
 } from "@/pages";
 import { useGame } from "@/hooks/use-game";
 import { useAuth } from "@/hooks/use-auth";
+import { AuthScreen } from "@/components/element/auth-screen";
 import { Titlebar } from "@/layouts/titlebar";
+import { NavigationBar } from "@/layouts/navigation-bar";
+import { useLauncherNavigation } from "@/hooks/use-launcher-navigation";
 import { Wrapper } from "@/layouts/wrapper";
 import { type Instance, type Page } from "@/lib/utils/interface";
 import { gamePhaseLabels } from "@/lib/utils/constant";
@@ -54,21 +52,14 @@ import {
 } from "@/lib/theme";
 import type { LauncherInfo } from "@/preload/interface";
 
-const navigation = [
-  { id: "home", label: "Tổng quan", icon: Home },
-  { id: "library", label: "Thư viện", icon: Layers },
-  { id: "content", label: "Mod & modpack", icon: Box },
-  { id: "downloads", label: "Tải xuống", icon: Download },
-  { id: "accounts", label: "Tài khoản", icon: UserRound },
-  { id: "settings", label: "Cài đặt", icon: Settings2 },
-] as const;
-
 export default function Application() {
   const authentication = useAuth();
   const gaming = useGame();
-  const [page, setPage] = useState<Page>("home");
+  const pageNavigation = useLauncherNavigation();
+  const { page, navigate: setPage } = pageNavigation;
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const library = useLibrary();
-  const { instances, settings, setSettings } = library;
+  const { instances, settings, instanceSettings, setSettings } = library;
   const [theme, setTheme] = useState<Theme>(readTheme);
   const [info, setInfo] = useState<LauncherInfo | null>(null);
   const [infoReady, setInfoReady] = useState(false);
@@ -77,7 +68,16 @@ export default function Application() {
   const [creating, setCreating] = useState(false);
   const [selected, setSelected] = useState<Instance | null>(null);
   const [notice, setNotice] = useState("");
+  const notifications = useNotifications(
+    notice || gaming.error || library.error || authentication.error,
+    gaming.game.jobs,
+  );
   const [contentDetail, setContentDetail] = useState(false);
+  const [instanceGroup, setInstanceGroup] = useState("");
+  const [runtimeVersion, setRuntimeVersion] = useState("1.20.1");
+  const [runtimeLoader, setRuntimeLoader] = useState("Vanilla");
+  const [runtimeLoaderVersion, setRuntimeLoaderVersion] = useState("");
+  const [shortcutTarget, setShortcutTarget] = useState<string | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
@@ -112,6 +112,17 @@ export default function Application() {
     return () =>
       window.removeEventListener("launcher:menu-action", onMenuAction);
   }, []);
+  useEffect(
+    () => window.electronAPI.library.onShortcutPlay(setShortcutTarget),
+    [],
+  );
+  useEffect(() => {
+    if (!shortcutTarget || !library.ready || !gaming.ready) return;
+    const instance = instances.find((item) => item.id === shortcutTarget);
+    setShortcutTarget(null);
+    if (!instance) setNotice("Shortcut trỏ tới instance không còn tồn tại.");
+    else void gaming.run({ action: "play", instance });
+  }, [shortcutTarget, library.ready, gaming.ready, instances]);
   useEffect(() => {
     let active = true;
     window.electronAPI.launcher
@@ -134,6 +145,13 @@ export default function Application() {
     else dialog.current?.close();
   }, [creating, selected]);
   useEffect(() => {
+    if (!selected) return;
+    setInstanceGroup(selected.group ?? "");
+    setRuntimeVersion(selected.version);
+    setRuntimeLoader(selected.loader);
+    setRuntimeLoaderVersion(selected.loaderVersion ?? "");
+  }, [selected]);
+  useEffect(() => {
     heading.current?.focus();
   }, [page]);
   const closeDialog = () => {
@@ -144,14 +162,27 @@ export default function Application() {
     (job: { instanceId: string | undefined }) =>
       job.instanceId === selected?.id,
   );
-  const selectedBusy = gaming.game.activeId === selected?.id;
+  const selectedBusy =
+    !!selectedJob &&
+    [
+      "queued",
+      "checking",
+      "downloading",
+      "paused",
+      "starting",
+      "running",
+      "stopping",
+    ].includes(selectedJob.phase);
   const statusLabel = (id: string) =>
     gamePhaseLabels[
       gaming.game.jobs.find(
         (job: { instanceId: string | undefined }) => job.instanceId === id,
       )?.phase ?? "idle"
     ];
-  const title = navigation.find((item) => item.id === page)?.label ?? "";
+  const title =
+    page === "settings/help"
+      ? "Về Gorth Launcher"
+      : (navigation.find((item) => item.id === page)?.label ?? "");
   const createInstance = async ({
     name,
     version,
@@ -186,66 +217,36 @@ export default function Application() {
   return (
     <>
       <div className="flex h-dvh flex-col overflow-hidden bg-background text-foreground">
-        <Titlebar />
+        <Titlebar showLogo={library.settings.showTitlebarLogo ?? true} />
+        <NavigationBar
+          sidebarOpen={sidebarOpen}
+          onToggleSidebar={() => setSidebarOpen((open) => !open)}
+          canGoBack={pageNavigation.canGoBack}
+          canGoForward={pageNavigation.canGoForward}
+          onBack={() => {
+            setSelected(null);
+            setCreating(false);
+            setContentDetail(false);
+            pageNavigation.back();
+          }}
+          onForward={() => {
+            setSelected(null);
+            setCreating(false);
+            setContentDetail(false);
+            pageNavigation.forward();
+          }}
+        />
         <SidebarProvider
-          open
-          onOpenChange={() => {}}
+          open={sidebarOpen}
+          onOpenChange={setSidebarOpen}
           className="min-h-0 flex-1 overflow-hidden"
         >
-          <Sidebar collapsible="none" className="">
-            <SidebarHeader className="">
-              <Card className="flex flex-row h-14 items-center p-2.5 gap-2.5 rounded-lg ring-0 hover:ring-1 ring-foreground/10 transition-all duration-200 ease-in-out">
-                <div className="flex aspect-square size-9 items-center justify-center rounded-md bg-primary text-primary-foreground">
-                  <Box className="size-4" />
-                </div>
-                <div className="grid flex-1 text-left text-sm leading-tight">
-                  <CardTitle>Launcher</CardTitle>
-                </div>
-              </Card>
-            </SidebarHeader>
-            <SidebarContent className="gap-0">
-              {[navigation].map((item) => (
-                <Fragment key="primary-navigation">
-                  <SidebarSeparator className="m-0" />
-                  <SidebarMenu className="p-2">
-                    {item.map(({ id, label, icon: Icon }) => (
-                      <SidebarMenuItem key={id}>
-                        <SidebarMenuButton
-                          className="h-9 [&>svg]:size-4"
-                          isActive={page === id}
-                          aria-current={page === id ? "page" : undefined}
-                          onClick={() => setPage(id)}
-                        >
-                          <Icon className="size-4" />
-                          <span>{label}</span>
-                        </SidebarMenuButton>
-                        {id === "library" && (
-                          <SidebarMenuBadge className="ring-1 ring-foreground/10 size-6 rounded-sm right-1">
-                            {instances.length}
-                          </SidebarMenuBadge>
-                        )}
-                      </SidebarMenuItem>
-                    ))}
-                  </SidebarMenu>
-                </Fragment>
-              ))}
-            </SidebarContent>
-            <SidebarFooter className="">
-              <SidebarMenu>
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    className="h-9"
-                    onClick={() => setPage("accounts")}
-                  >
-                    <UserRound className="size-4" />
-                    <span>
-                      {authentication.auth?.launcher?.name ?? "Đăng nhập Gorth"}
-                    </span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              </SidebarMenu>
-            </SidebarFooter>
-          </Sidebar>
+          <Dashboard
+            page={page}
+            onNavigate={setPage}
+            instanceCount={instances.length}
+            unreadCount={notifications.unread}
+          />
           <main
             className={`min-w-0 flex-1 ${contentDetail ? "overflow-hidden" : "overflow-y-auto"}`}
           >
@@ -300,7 +301,25 @@ export default function Application() {
               >
                 {page === "home" && (
                   <HomePage
-                    hasActiveJob={!!gaming.game.activeId}
+                    game={gaming.game}
+                    versions={gaming.versions}
+                    onVersionCreate={(version) =>
+                      void createInstance({
+                        name: `MC ${version}`,
+                        version,
+                        loader: "Vanilla",
+                        loaderVersion: null,
+                      })
+                    }
+                    accounts={authentication.auth?.accounts ?? []}
+                    accountId={authentication.auth?.selectedAccountId ?? null}
+                    onAccount={(id) =>
+                      void authentication.run({ action: "game.select", id })
+                    }
+                    onPlay={(instance) =>
+                      void gaming.run({ action: "play", instance })
+                    }
+                    onStop={(id) => void gaming.run({ action: "stop", id })}
                     instances={instances}
                     info={info}
                     onCreate={() => setCreating(true)}
@@ -309,24 +328,95 @@ export default function Application() {
                     statusLabel={statusLabel}
                   />
                 )}
+                {page === "shortcuts" && <ShortcutsPage />}
+                {page === "settings/help" && <HelpPage info={info} />}
                 {page === "library" && (
-                  <LibraryPage
-                    instances={instances}
-                    query={query}
-                    onQueryChange={setQuery}
-                    filter={filter}
-                    onFilterChange={setFilter}
-                    onCreate={() => setCreating(true)}
-                    onSelect={setSelected}
-                    statusLabel={statusLabel}
-                  />
+                  <>
+                    <div className="mb-4 flex justify-end gap-2">
+                      <Button
+                        className="h-9"
+                        variant="outline"
+                        disabled={library.busy || !!gaming.game.activeId}
+                        onClick={() =>
+                          void library.run({ action: "orphans.import" })
+                        }
+                      >
+                        Tìm và nhập instance mồ côi
+                      </Button>
+                    </div>
+                    <LibraryPage
+                      instances={instances}
+                      query={query}
+                      onQueryChange={setQuery}
+                      filter={filter}
+                      onFilterChange={setFilter}
+                      onCreate={() => setCreating(true)}
+                      onSelect={setSelected}
+                      statusLabel={statusLabel}
+                    />
+                  </>
                 )}
                 {page === "downloads" && (
                   <DownloadsPage {...gaming} instances={instances} />
                 )}
+                {page === "instance-data" && (
+                  <InstanceDataPage
+                    instances={instances}
+                    busy={library.busy || !!gaming.game.activeId}
+                    onChanged={() =>
+                      setNotice("Đã cập nhật thư viện instance.")
+                    }
+                  />
+                )}
                 {page === "accounts" && <AccountsPage {...authentication} />}
-                {page === "content" && (
+                {page === "console" && (
+                  <ConsolePage {...gaming} instances={instances} />
+                )}
+                {page === "gallery" && (
+                  <GalleryPage
+                    instances={instances}
+                    onOpenDirectory={gaming.openDirectory}
+                  />
+                )}
+                {page === "notifications" && (
+                  <NotificationsPage {...notifications} />
+                )}
+                {page === "settings/instance" && (
+                  <InstancePreferencesPage
+                    instances={instances}
+                    settings={instanceSettings}
+                    accounts={authentication.auth?.accounts ?? []}
+                    busy={library.busy || !!gaming.game.activeId}
+                    onEdit={setSelected}
+                    onSave={(id, value) =>
+                      library.run({
+                        action: "instance.settings",
+                        id,
+                        settings: value,
+                      })
+                    }
+                  />
+                )}
+                {[
+                  "content",
+                  "mods",
+                  "modpacks",
+                  "resourcepacks",
+                  "shaders",
+                ].includes(page) && (
                   <ContentPage
+                    key={page}
+                    fixedKind={
+                      page === "mods"
+                        ? "mod"
+                        : page === "modpacks"
+                          ? "modpack"
+                          : page === "resourcepacks"
+                            ? "resourcepack"
+                            : page === "shaders"
+                              ? "shader"
+                              : undefined
+                    }
                     instances={instances}
                     gameBusy={!!gaming.game.activeId}
                     onLibrary={() => setPage("library")}
@@ -342,6 +432,7 @@ export default function Application() {
                     setTheme={setTheme}
                     info={info}
                     setNotice={setNotice}
+                    history={gaming.game.history}
                   />
                 )}
                 {page === "library" && library.trash.length > 0 && (
@@ -350,9 +441,18 @@ export default function Application() {
                       Thùng rác ({library.trash.length})
                     </h2>
                     <p className="text-sm text-muted-foreground">
-                      Instance đã xóa vẫn được giữ tại thư mục thùng rác của
-                      launcher để khôi phục.
+                      Instance được tự dọn theo thời hạn trong Cài đặt.
                     </p>
+                    <Button
+                      className="h-9"
+                      variant="outline"
+                      disabled={library.busy || !!gaming.game.activeId}
+                      onClick={() =>
+                        void library.run({ action: "trash.cleanup" })
+                      }
+                    >
+                      Dọn toàn bộ Trash
+                    </Button>
                     {library.trash.map((item) => (
                       <div
                         key={item.id}
@@ -371,6 +471,39 @@ export default function Application() {
                         >
                           Khôi phục
                         </Button>
+                        <Button
+                          className="h-9"
+                          variant="outline"
+                          disabled={!!gaming.game.activeId}
+                          onClick={() =>
+                            void library.run({
+                              action: "trash.purge",
+                              id: item.id,
+                              keepSaves: true,
+                            })
+                          }
+                        >
+                          Giữ saves & xóa
+                        </Button>
+                        <Button
+                          className="h-9"
+                          variant="destructive"
+                          disabled={!!gaming.game.activeId}
+                          onClick={() => {
+                            if (
+                              window.confirm(
+                                "Xóa vĩnh viễn instance và toàn bộ saves?",
+                              )
+                            )
+                              void library.run({
+                                action: "trash.purge",
+                                id: item.id,
+                                keepSaves: false,
+                              });
+                          }}
+                        >
+                          Xóa vĩnh viễn
+                        </Button>
                       </div>
                     ))}
                   </section>
@@ -388,7 +521,7 @@ export default function Application() {
         </SidebarProvider>
         <dialog
           ref={dialog}
-          className="m-auto max-h-[calc(100vh-3rem)] w-[480px] max-w-[calc(100vw-3rem)] overflow-y-auto rounded-xl border bg-background p-6 text-foreground shadow-lg backdrop:bg-black/50 [&_h2]:text-xl [&_h2]:font-semibold [&_label]:mt-4 [&_label]:flex [&_label]:min-w-0 [&_label]:flex-1 [&_label]:flex-col [&_label]:gap-2 [&_label]:text-sm [&_input]:h-9 [&_select]:h-9"
+          className="m-auto max-h-[calc(100vh-3rem)] w-[720px] max-w-[calc(100vw-3rem)] overflow-y-auto rounded-xl border bg-background p-6 text-foreground shadow-lg backdrop:bg-black/50 [&_h2]:text-xl [&_h2]:font-semibold [&_label]:mt-4 [&_label]:flex [&_label]:min-w-0 [&_label]:flex-1 [&_label]:flex-col [&_label]:gap-2 [&_label]:text-sm [&_input]:h-9 [&_select]:h-9"
           aria-labelledby="instance-dialog-title"
           onCancel={closeDialog}
           onClick={(event) => {
@@ -448,6 +581,171 @@ export default function Application() {
                   }
                 }}
               />
+              <section className="mt-5 space-y-3 rounded-lg border p-4">
+                <h3 className="font-medium">Nhận diện & nhóm</h3>
+                <div className="flex gap-2">
+                  <Input
+                    className="h-9 flex-1"
+                    placeholder="Tên nhóm / folder"
+                    value={instanceGroup}
+                    maxLength={60}
+                    onChange={(event) => setInstanceGroup(event.target.value)}
+                  />
+                  <Button
+                    className="h-9"
+                    variant="outline"
+                    disabled={library.busy || !!gaming.game.activeId}
+                    onClick={() =>
+                      void library.run({
+                        action: "metadata",
+                        id: selected.id,
+                        group: instanceGroup.trim() || null,
+                      })
+                    }
+                  >
+                    Lưu nhóm
+                  </Button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    className="h-9"
+                    variant="outline"
+                    disabled={library.busy || !!gaming.game.activeId}
+                    onClick={() =>
+                      void window.electronAPI.library.chooseIcon(selected.id)
+                    }
+                  >
+                    <Image />
+                    Chọn icon
+                  </Button>
+                  {selected.iconData && (
+                    <Button
+                      className="h-9"
+                      variant="ghost"
+                      disabled={library.busy || !!gaming.game.activeId}
+                      onClick={() =>
+                        void library.run({
+                          action: "icon",
+                          id: selected.id,
+                          iconData: null,
+                        })
+                      }
+                    >
+                      Bỏ icon
+                    </Button>
+                  )}
+                  <Button
+                    className="h-9"
+                    variant="outline"
+                    onClick={async () => {
+                      const result =
+                        await window.electronAPI.library.createShortcut(
+                          selected.id,
+                        );
+                      setNotice(
+                        result.ok
+                          ? `Đã tạo shortcut: ${result.path}`
+                          : (result.error ?? "Không tạo được shortcut."),
+                      );
+                    }}
+                  >
+                    <Link />
+                    Desktop shortcut
+                  </Button>
+                </div>
+              </section>
+              <section className="mt-5 space-y-3 rounded-lg border p-4">
+                <h3 className="font-medium">Minecraft & mod loader</h3>
+                <div className="grid grid-cols-3 gap-2">
+                  <NativeSelect
+                    className="w-full"
+                    value={runtimeVersion}
+                    onChange={(event) => {
+                      setRuntimeVersion(event.target.value);
+                      setRuntimeLoader("Vanilla");
+                      setRuntimeLoaderVersion("");
+                    }}
+                  >
+                    {gaming.versions.map((version) => (
+                      <NativeSelectOption key={version.id} value={version.id}>
+                        {version.id}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                  <NativeSelect
+                    className="w-full"
+                    value={`${runtimeLoader}:${runtimeLoaderVersion}`}
+                    onChange={(event) => {
+                      const [loader, version = ""] =
+                        event.target.value.split(":");
+                      setRuntimeLoader(loader);
+                      setRuntimeLoaderVersion(version);
+                    }}
+                  >
+                    <NativeSelectOption value="Vanilla:">
+                      Vanilla
+                    </NativeSelectOption>
+                    {supportedLoaderCatalog
+                      .filter((entry) => entry.minecraft === runtimeVersion)
+                      .map((entry) => (
+                        <NativeSelectOption
+                          key={`${entry.loader}:${entry.version}`}
+                          value={`${entry.loader}:${entry.version}`}
+                        >
+                          {entry.loader} {entry.version}
+                        </NativeSelectOption>
+                      ))}
+                  </NativeSelect>
+                  <Button
+                    className="h-9"
+                    disabled={library.busy || !!gaming.game.activeId}
+                    onClick={async () => {
+                      if (
+                        !window.confirm(
+                          "Đổi runtime sẽ yêu cầu tải lại game/loader nhưng giữ nguyên saves, mods và config. Tiếp tục?",
+                        )
+                      )
+                        return;
+                      if (
+                        await library.run({
+                          action: "runtime",
+                          id: selected.id,
+                          version: runtimeVersion,
+                          loader: runtimeLoader,
+                          loaderVersion: runtimeLoaderVersion || null,
+                        })
+                      ) {
+                        setSelected({
+                          ...selected,
+                          version: runtimeVersion,
+                          loader: runtimeLoader,
+                          loaderVersion: runtimeLoaderVersion || null,
+                        });
+                        setNotice(
+                          "Đã đổi runtime. Hãy tải game trước khi chơi.",
+                        );
+                      }
+                    }}
+                  >
+                    Đổi runtime
+                  </Button>
+                </div>
+              </section>
+              {instanceSettings[selected.id] && (
+                <InstanceSettingsForm
+                  key={selected.id}
+                  initialSettings={instanceSettings[selected.id]}
+                  accounts={authentication.auth?.accounts ?? []}
+                  busy={library.busy || !!gaming.game.activeId}
+                  onSave={(next) =>
+                    library.run({
+                      action: "instance.settings",
+                      id: selected.id,
+                      settings: next,
+                    })
+                  }
+                />
+              )}
               {library.busy && (
                 <p role="status" className="mt-2 text-sm">
                   Đang xử lý dữ liệu instance…
@@ -474,11 +772,12 @@ export default function Application() {
                     "Tải Minecraft và Temurin, sau đó chọn tài khoản game để chơi."}
                 </p>
               </div>
-              {!authentication.auth?.selectedAccountId && (
-                <p className="mt-3 text-sm text-muted-foreground">
-                  Thêm và chọn tài khoản game ở trang Tài khoản để chơi.
-                </p>
-              )}
+              {!authentication.auth?.selectedAccountId &&
+                !instanceSettings[selected.id]?.accountId && (
+                  <p className="mt-3 text-sm text-muted-foreground">
+                    Thêm và chọn tài khoản game ở trang Tài khoản để chơi.
+                  </p>
+                )}
               {!supportedLoader(selected) && (
                 <p className="mt-3 text-sm text-destructive">
                   Phiên bản Minecraft hoặc loader không còn được hỗ trợ. Hãy tạo
@@ -553,14 +852,13 @@ export default function Application() {
                       variant="outline"
                       disabled={
                         library.busy ||
-                        !!gaming.game.activeId ||
+                        selectedBusy ||
                         !supportedLoader(selected)
                       }
                       onClick={() =>
                         void gaming.run({
                           action: "install",
                           instance: selected,
-                          settings,
                         })
                       }
                     >
@@ -569,16 +867,16 @@ export default function Application() {
                     <Button
                       className="h-9"
                       disabled={
-                        !!gaming.game.activeId ||
+                        selectedBusy ||
                         library.busy ||
-                        !authentication.auth?.selectedAccountId ||
+                        (!authentication.auth?.selectedAccountId &&
+                          !instanceSettings[selected.id]?.accountId) ||
                         !supportedLoader(selected)
                       }
                       onClick={() =>
                         void gaming.run({
                           action: "play",
                           instance: selected,
-                          settings,
                         })
                       }
                     >
@@ -591,6 +889,16 @@ export default function Application() {
           )}
         </dialog>
       </div>
+      <AuthScreen
+        sidebarOpen={sidebarOpen}
+        onToggleSidebar={() => setSidebarOpen((open) => !open)}
+        onReturn={() => {
+          setPage("accounts");
+          setSelected(null);
+          setCreating(false);
+          setContentDetail(false);
+        }}
+      />
     </>
   );
 }

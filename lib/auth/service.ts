@@ -1,4 +1,11 @@
-import { BrowserWindow, ipcMain, shell } from "electron";
+import { upsertUserProfile } from "@/services/user-profile";
+import { BrowserWindow, ipcMain } from "electron";
+import {
+  openAuthView,
+  closeAuthView,
+  clearAuthBrowserSession,
+  registerAuthViewIpc,
+} from "@/main/services/auth-view";
 import type {
   AuthCommand,
   AuthData,
@@ -6,7 +13,11 @@ import type {
   AuthSnapshot,
   GameAccount,
 } from "@/lib/utils/interface";
-import { gorthIssuer } from "@/lib/utils/environment";
+import {
+  ssoIssuer,
+  ssoOAuthClientId,
+  ssoRedirectUri,
+} from "@/lib/utils/environment";
 import { emptyAuthData, offlineUuid, username } from "./model";
 import { readVault, writeVault, vaultExists } from "./vault";
 import { gorthBinding, loginGorth, refreshGorth, revokeGorth } from "./gorth";
@@ -42,7 +53,12 @@ function snapshot(): AuthSnapshot {
           name: data.launcher.name,
           email: data.launcher.email,
           username: data.launcher.username,
+          image: data.launcher.image,
+          emailVerified: data.launcher.emailVerified,
           expiresAt: data.launcher.tokens.expiresAt,
+          canRefresh:
+            !!data.launcher.tokens.refreshToken &&
+            data.launcher.tokens.binding === gorthBinding(),
           needsLogin:
             data.launcher.tokens.expiresAt <= Date.now() ||
             data.launcher.tokens.binding !== gorthBinding(),
@@ -63,7 +79,7 @@ function snapshot(): AuthSnapshot {
     selectedAccountId: data.selectedAccountId,
     pending,
     providers: {
-      gorthLauncher: !!gorthIssuer,
+      gorthLauncher: !!(ssoIssuer && ssoOAuthClientId && ssoRedirectUri),
       ely: false,
       gorthGame: false,
     },
@@ -107,6 +123,7 @@ function command(value: unknown): AuthCommand {
   if (
     [
       "launcher.login",
+      "launcher.register",
       "launcher.unlock",
       "launcher.logout",
       "launcher.refresh",
@@ -138,8 +155,12 @@ async function refreshAccount(account: GameAccount, signal: AbortSignal) {
     );
   return account;
 }
-async function execute(raw: unknown): Promise<AuthResult> {
+async function execute(
+  raw: unknown,
+  owner: BrowserWindow,
+): Promise<AuthResult> {
   let ownOperation: AbortController | null = null;
+  let completed = false;
   let c: AuthCommand | undefined;
   try {
     c = command(raw);
@@ -167,6 +188,7 @@ async function execute(raw: unknown): Promise<AuthResult> {
       ) {
         const next = await refreshGorth(data.launcher, signal);
         signal.throwIfAborted();
+        upsertUserProfile(next);
         await save({ ...data, launcher: next });
       }
       return { ok: true, snapshot: snapshot() };
@@ -212,20 +234,30 @@ async function execute(raw: unknown): Promise<AuthResult> {
         } else await upsert(await refreshAccount(account, signal));
         break;
       }
-      case "launcher.login": {
-        pending = { provider: "gorth", expiresAt: Date.now() + 180_000 };
+      case "launcher.login":
+      case "launcher.register": {
+        const mode = c.action === "launcher.register" ? "register" : "login";
+        pending = {
+          provider: "gorth",
+          expiresAt: Date.now() + (mode === "register" ? 600_000 : 180_000),
+        };
         changed();
         const session = await loginGorth(
-          (url) => shell.openExternal(url),
+          (url, receiveCallback) =>
+            openAuthView(owner, url, receiveCallback, ownOperation!, mode),
           signal,
+          mode,
         );
         signal.throwIfAborted();
+        upsertUserProfile(session);
         await save({ ...data, launcher: session });
+        completed = true;
         break;
       }
       case "launcher.logout": {
         const previous = data.launcher;
         await save({ ...data, launcher: null });
+        await clearAuthBrowserSession();
         if (previous) await revokeGorth(previous.tokens, signal);
         break;
       }
@@ -233,6 +265,7 @@ async function execute(raw: unknown): Promise<AuthResult> {
         if (!data.launcher) throw new Error("Chưa đăng nhập launcher.");
         const next = await refreshGorth(data.launcher, signal);
         signal.throwIfAborted();
+        upsertUserProfile(next);
         await save({
           ...data,
           launcher: next,
@@ -243,32 +276,38 @@ async function execute(raw: unknown): Promise<AuthResult> {
     return { ok: true, snapshot: { ...snapshot(), pending: null } };
   } catch (error) {
     if (
+      ownOperation &&
+      unlocked &&
+      (c?.action === "launcher.refresh" ||
+        (c?.action === "launcher.unlock" &&
+          data.launcher &&
+          data.launcher.tokens.expiresAt <= Date.now() + 30_000))
+    ) {
+      data = { ...data, launcher: null };
+      try {
+        await save(data);
+      } catch {
+        return {
+          ok: false,
+          error:
+            "Phiên đã hết hạn nhưng không cập nhật được kho khóa. Hãy mở khóa rồi đăng nhập lại.",
+          snapshot: snapshot(),
+        };
+      }
+    } else if (
+      ownOperation &&
+      c?.action === "game.refresh" &&
       error instanceof AuthHttpError &&
       (["invalid_grant", "invalid_token"].includes(error.code) ||
-        error.status === 401 ||
-        error.status === 403)
+        [401, 403].includes(error.status))
     ) {
-      if (c?.action === "launcher.refresh" || c?.action === "launcher.unlock") {
-        data = { ...data, launcher: null };
-        try {
-          await save(data);
-        } catch {
-          return {
-            ok: false,
-            error:
-              "Phiên đã hết hạn nhưng không cập nhật được kho khóa. Hãy mở khóa rồi đăng nhập lại.",
-            snapshot: snapshot(),
-          };
-        }
-      } else if (c?.action === "game.refresh") {
-        const id = c.id;
-        await save({
-          ...data,
-          accounts: data.accounts.map((a) =>
-            a.id === id ? { ...a, tokens: undefined } : a,
-          ),
-        });
-      }
+      const id = c.id;
+      await save({
+        ...data,
+        accounts: data.accounts.map((a) =>
+          a.id === id ? { ...a, tokens: undefined } : a,
+        ),
+      });
     }
     return {
       ok: false,
@@ -279,6 +318,7 @@ async function execute(raw: unknown): Promise<AuthResult> {
     };
   } finally {
     if (ownOperation && operation === ownOperation) {
+      closeAuthView(owner, completed);
       operation = null;
       pending = null;
       changed();
@@ -294,7 +334,9 @@ export function registerAuthIpc() {
       event.senderFrame !== event.sender.mainFrame
     )
       throw new Error("Untrusted auth sender");
+    return window;
   };
+  registerAuthViewIpc(trusted);
   ipcMain.handle("auth:snapshot", async (event) => {
     trusted(event);
     try {
@@ -308,18 +350,20 @@ export function registerAuthIpc() {
     }
   });
   ipcMain.handle("auth:command", async (event, value: unknown) => {
-    trusted(event);
-    return execute(value);
+    const owner = trusted(event);
+    return execute(value, owner);
   });
 }
 export function cancelAuth() {
   operation?.abort();
 }
 // Main-process-only API for the future launch engine. Never expose this over IPC.
-export async function resolveGameSession() {
+export async function resolveGameSession(accountId?: string | null) {
   await load();
   if (operation) throw new Error("Tài khoản đang được cập nhật.");
-  const account = data.accounts.find((a) => a.id === data.selectedAccountId);
+  const account = data.accounts.find(
+    (a) => a.id === (accountId || data.selectedAccountId),
+  );
   if (!account) throw new Error("Chọn tài khoản game trước khi chơi.");
   if (account.provider === "offline")
     return {
@@ -331,4 +375,9 @@ export async function resolveGameSession() {
   throw new Error(
     "Online game accounts are not enabled yet. Use an offline profile.",
   );
+}
+
+export function getAuthenticatedUserId() {
+  const current = snapshot().launcher;
+  return unlocked && current && !current.needsLogin ? current.id : null;
 }

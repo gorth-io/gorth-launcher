@@ -5,18 +5,21 @@ export const contentLabels: Record<ContentKind, string> = {
   modpack: "Modpack",
   shader: "Shader",
   resourcepack: "Texture pack",
+  datapack: "Data pack",
 };
 export const curseforgeClasses: Record<ContentKind, number> = {
   mod: 6,
   modpack: 4471,
   shader: 6552,
   resourcepack: 12,
+  datapack: 6945,
 };
 export const curseforgePaths: Record<ContentKind, string> = {
   mod: "mc-mods",
   modpack: "modpacks",
   shader: "shaders",
   resourcepack: "texture-packs",
+  datapack: "data-packs",
 };
 export function projectWebsite(
   provider: ContentProvider,
@@ -36,11 +39,11 @@ export function allowedContentWebsite(value: string) {
       return false;
     return (
       (url.hostname === "modrinth.com" &&
-        /^\/(mod|modpack|shader|resourcepack)\/[a-zA-Z0-9._()~-]+(?:\/|$)/.test(
+        /^\/(mod|modpack|shader|resourcepack|datapack)\/[a-zA-Z0-9._()~-]+(?:\/|$)/.test(
           url.pathname,
         )) ||
       (url.hostname === "www.curseforge.com" &&
-        /^\/minecraft\/(mc-mods|modpacks|shaders|texture-packs)\/[a-zA-Z0-9._()~-]+(?:\/|$)/.test(
+        /^\/minecraft\/(mc-mods|modpacks|shaders|texture-packs|data-packs)\/[a-zA-Z0-9._()~-]+(?:\/|$)/.test(
           url.pathname,
         ))
     );

@@ -1,3 +1,6 @@
+import { fetcher } from "@/lib/utils/fetcher";
+import type { Method } from "axios";
+
 export class AuthHttpError extends Error {
   constructor(
     public code: string,
@@ -11,16 +14,27 @@ export async function requestJson(
   options: RequestInit = {},
   signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
-  const response = await fetch(url, {
-    ...options,
+  const response = await fetcher<string>({
+    url,
+    method: (options.method ?? "GET") as Method,
+    body: options.body,
     redirect: "error",
-    signal: signal
-      ? AbortSignal.any([signal, AbortSignal.timeout(20_000)])
-      : AbortSignal.timeout(20_000),
-    headers: { Accept: "application/json", ...options.headers },
+    signal: signal ?? options.signal ?? undefined,
+    timeout: 20_000,
+    responseType: "text",
+    validateStatus: () => true,
+    headers: {
+      Accept: "application/json",
+      ...Object.fromEntries(new Headers(options.headers)),
+    },
   });
-  const data = await response.json().catch(() => null);
-  if (!response.ok)
+  let data: Record<string, unknown> | null = null;
+  try {
+    data = JSON.parse(response.data);
+  } catch {
+    // Keep OAuth error handling stable even when upstream returns HTML.
+  }
+  if (response.status < 200 || response.status >= 300)
     throw new AuthHttpError(
       typeof data?.error === "string" ? data.error : "request_failed",
       response.status,

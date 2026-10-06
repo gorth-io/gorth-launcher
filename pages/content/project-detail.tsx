@@ -148,7 +148,8 @@ export function ProjectDetail({
         )}
         {query.kind === "shader" && (
           <p className="text-xs text-muted-foreground">
-            Cần cài Iris hoặc OptiFine phù hợp để sử dụng shader trong game.
+            Launcher sẽ tự cài Iris và dependency phù hợp cho instance Fabric
+            hoặc NeoForge.
           </p>
         )}
         {!open && feedback}
@@ -188,7 +189,7 @@ export function ProjectDetail({
           <p className="text-xs text-muted-foreground">
             {pack
               ? "Chỉ chấp nhận loader nằm trong danh sách ổn định của launcher."
-              : "Mod sẽ kèm dependency bắt buộc; shader và texture pack được lưu trong thư mục tương ứng."}
+              : "Mod sẽ kèm dependency bắt buộc; shader tự cài Iris; texture/data pack được lưu đúng thư mục."}
           </p>
           {feedback}
           <DialogFooter>

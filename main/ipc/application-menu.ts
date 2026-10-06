@@ -1,6 +1,7 @@
-import { app, Menu, type MenuItemConstructorOptions } from "electron";
+import { Menu, type MenuItemConstructorOptions } from "electron";
 import { sendMenuAction } from "@/main/ipc/native-menu";
 import { resizeFocusedWindow } from "@/main/ipc/window";
+import { applyShortcutAccelerators } from "@/main/ipc/shortcuts";
 
 export function installApplicationMenu() {
   const template: MenuItemConstructorOptions[] = [
@@ -9,7 +10,10 @@ export function installApplicationMenu() {
           {
             label: "Gorth Launcher",
             submenu: [
-              { role: "about" as const },
+              {
+                label: "About Gorth Launcher",
+                click: () => sendMenuAction("settings/help"),
+              },
               {
                 label: "Settings…",
                 accelerator: "CmdOrCtrl+,",
@@ -55,6 +59,11 @@ export function installApplicationMenu() {
     {
       label: "Launcher",
       submenu: [
+        {
+          label: "Keyboard Shortcuts",
+          accelerator: "CmdOrCtrl+Shift+K",
+          click: () => sendMenuAction("shortcuts"),
+        },
         { label: "Overview", click: () => sendMenuAction("home") },
         { label: "Accounts", click: () => sendMenuAction("accounts") },
         {
@@ -88,9 +97,13 @@ export function installApplicationMenu() {
     {
       label: "Help",
       submenu: [
-        { label: "About Gorth Launcher", click: () => app.showAboutPanel() },
+        {
+          label: "About Gorth Launcher",
+          click: () => sendMenuAction("settings/help"),
+        },
       ],
     },
   ];
+  applyShortcutAccelerators(template);
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }

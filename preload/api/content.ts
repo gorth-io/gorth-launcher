@@ -1,6 +1,8 @@
 import { ipcRenderer } from "electron";
 import type {
   ContentInstall,
+  ContentInventory,
+  ContentManage,
   ContentProject,
   ContentQuery,
   ContentResult,
@@ -23,6 +25,12 @@ export const contentApi = {
     ipcRenderer.invoke("content:versions", { query, projectId }),
   install: (input: ContentInstall): Promise<ContentResult<null>> =>
     ipcRenderer.invoke("content:install", input),
+  inventory: (instanceId: string): Promise<ContentResult<ContentInventory>> =>
+    ipcRenderer.invoke("content:inventory", { instanceId }),
+  updates: (instanceId: string): Promise<ContentResult<ContentInventory>> =>
+    ipcRenderer.invoke("content:updates", { instanceId }),
+  manage: (input: ContentManage): Promise<ContentResult<ContentInventory>> =>
+    ipcRenderer.invoke("content:manage", input),
   importPack: (): Promise<ContentResult<null>> =>
     ipcRenderer.invoke("content:import"),
   cancel: (): Promise<void> => ipcRenderer.invoke("content:cancel"),

@@ -9,6 +9,10 @@ export function useGame() {
     directory: "",
     jobs: [],
     activeId: null,
+    activeIds: [],
+    downloadingId: null,
+    queue: [],
+    history: [],
   });
   const [versions, setVersions] = useState<GameVersion[]>([
     { id: "1.20.1", type: "release" },
@@ -66,12 +70,18 @@ export function useGame() {
       setError("Không kết nối được dịch vụ game.");
     }
   }, []);
+  const exportLog = useCallback(async (id: string) => {
+    const result = await window.electronAPI.game.exportLog(id);
+    if (!result.ok) setError(result.error ?? "Không xuất được console.");
+    return result.ok;
+  }, []);
   return {
     game,
     versions,
     error,
     run,
     openDirectory,
+    exportLog,
     ready,
     clearError: () => setError(""),
   };

@@ -4,7 +4,13 @@ import { Search, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
+import { PageShell } from "@/layouts/page-shell";
+import { PageBanner } from "@/components/element/page-banner";
+import modsBackground from "@/assets/dawn/mod.png";
+import shaderBackground from "@/assets/dawn/shader.png";
+import resourceBackground from "@/assets/dawn/background2.png";
 import { ProjectDetail } from "./project-detail";
+import { InstalledContentManager } from "./installed-content";
 import { contentLabels } from "@/lib/content/website";
 import { loaderCatalog, supportedLoader } from "@/lib/game/catalog";
 import type { Instance } from "@/lib/utils/interface";
@@ -25,12 +31,14 @@ export function ContentPage({
   onLibrary,
   hideWebview,
   onDetailChange,
+  fixedKind,
 }: {
   instances: Instance[];
   gameBusy: boolean;
   onLibrary: () => void;
   hideWebview: boolean;
   onDetailChange: (active: boolean) => void;
+  fixedKind?: ContentKind;
 }) {
   const [status, setStatus] = useState<ContentStatus>({
     busy: false,
@@ -47,6 +55,8 @@ export function ContentPage({
   } | null>(null);
   const [searched, setSearched] = useState<ContentQuery | null>(null);
   const [target, setTarget] = useState("");
+  const [targetWorld, setTargetWorld] = useState("");
+  const [worlds, setWorlds] = useState<string[]>([]);
   const [selected, setSelected] = useState<ContentProject | null>(null);
   const [versions, setVersions] = useState<ContentVersion[]>([]);
   const [versionId, setVersionId] = useState("");
@@ -90,12 +100,17 @@ export function ContentPage({
       setPending(false);
     }
   }
-  async function search(query: ContentQuery, instanceId: string) {
+  async function search(
+    query: ContentQuery,
+    instanceId: string,
+    worldName = "",
+  ) {
     setSelected(null);
     setVersions([]);
     setResults(null);
     setSearched(query);
     setTarget(instanceId);
+    setTargetWorld(worldName);
     const result = await execute(() =>
       window.electronAPI.content.search(query),
     );
@@ -117,10 +132,11 @@ export function ContentPage({
   const form = useForm({
     defaultValues: {
       provider: "modrinth" as ContentProvider,
-      kind: "modpack" as ContentKind,
+      kind: fixedKind ?? ("modpack" as ContentKind),
       query: "",
       preset: "0",
       instanceId: "",
+      worldName: "",
     },
     onSubmit: async ({ value }) => {
       const preset = loaderCatalog[Number(value.preset)] ?? loaderCatalog[0];
@@ -131,6 +147,10 @@ export function ContentPage({
         (instance.loader === "Vanilla" || !supportedLoader(instance))
       ) {
         setError("Chọn instance có mod loader được hỗ trợ.");
+        return;
+      }
+      if (value.kind === "datapack" && (!instance || !value.worldName)) {
+        setError("Chọn instance và world để cài data pack.");
         return;
       }
       await search(
@@ -149,6 +169,7 @@ export function ContentPage({
           offset: 0,
         },
         value.instanceId,
+        value.worldName,
       );
     },
   });
@@ -182,6 +203,9 @@ export function ContentPage({
               projectId: selected.id,
               versionId,
               ...(searched.kind !== "modpack" ? { instanceId: target } : {}),
+              ...(searched.kind === "datapack"
+                ? { worldName: targetWorld }
+                : {}),
             }),
           );
           return result === null;
@@ -189,14 +213,35 @@ export function ContentPage({
       />
     );
   return (
-    <section className="space-y-5">
+    <PageShell
+      aside={
+        <InstalledContentManager
+          instances={instances}
+          unavailable={busy}
+          kind={fixedKind}
+        />
+      }
+    >
+      {fixedKind && (
+        <PageBanner
+          title={contentLabels[fixedKind]}
+          description="Browse, install, and manage content via Modrinth and CurseForge."
+          image={
+            fixedKind === "shader"
+              ? shaderBackground
+              : fixedKind === "resourcepack"
+                ? resourceBackground
+                : modsBackground
+          }
+        />
+      )}
       <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold">
-            Mod, modpack, shader & texture pack
+            Mod, modpack, shader, texture pack & data pack
           </h2>
           <p className="text-sm text-muted-foreground">
-            Modrinth · CurseForge · chỉ hiện file release phù hợp
+            Modrinth · CurseForge · quản lý và chỉ hiện file release phù hợp
             Minecraft/loader.
           </p>
         </div>
@@ -249,25 +294,28 @@ export function ContentPage({
               </label>
             )}
           </form.Field>
-          <form.Field name="kind">
-            {(field) => (
-              <label className="grid gap-1 text-sm">
-                Loại
-                <select
-                  className={selectClass}
-                  value={field.state.value}
-                  onChange={(event) =>
-                    field.handleChange(event.target.value as ContentKind)
-                  }
-                >
-                  <option value="modpack">Modpack</option>
-                  <option value="mod">Mod</option>
-                  <option value="shader">Shader</option>
-                  <option value="resourcepack">Texture pack</option>
-                </select>
-              </label>
-            )}
-          </form.Field>
+          {!fixedKind && (
+            <form.Field name="kind">
+              {(field) => (
+                <label className="grid gap-1 text-sm">
+                  Loại
+                  <select
+                    className={selectClass}
+                    value={field.state.value}
+                    onChange={(event) =>
+                      field.handleChange(event.target.value as ContentKind)
+                    }
+                  >
+                    <option value="modpack">Modpack</option>
+                    <option value="mod">Mod</option>
+                    <option value="shader">Shader</option>
+                    <option value="resourcepack">Texture pack</option>
+                    <option value="datapack">Data pack</option>
+                  </select>
+                </label>
+              )}
+            </form.Field>
+          )}
           <form.Subscribe selector={(state) => state.values.kind}>
             {(kind) =>
               kind === "modpack" ? (
@@ -299,15 +347,25 @@ export function ContentPage({
                       <select
                         className={selectClass}
                         value={field.state.value}
-                        onChange={(event) =>
-                          field.handleChange(event.target.value)
-                        }
+                        onChange={(event) => {
+                          field.handleChange(event.target.value);
+                          setWorlds([]);
+                          form.setFieldValue("worldName", "");
+                          if (event.target.value)
+                            void window.electronAPI.content
+                              .inventory(event.target.value)
+                              .then((result) =>
+                                setWorlds(result.data?.worlds ?? []),
+                              );
+                        }}
                       >
                         <option value="">Chỉ duyệt · chưa chọn instance</option>
                         {instances
                           .filter(
                             (item) =>
                               (kind !== "mod" || item.loader !== "Vanilla") &&
+                              (kind !== "shader" ||
+                                ["Fabric", "NeoForge"].includes(item.loader)) &&
                               supportedLoader(item),
                           )
                           .map((item) => (
@@ -315,6 +373,33 @@ export function ContentPage({
                               {item.name} · {item.loader} {item.version}
                             </option>
                           ))}
+                      </select>
+                    </label>
+                  )}
+                </form.Field>
+              )
+            }
+          </form.Subscribe>
+          <form.Subscribe selector={(state) => state.values.kind}>
+            {(kind) =>
+              kind === "datapack" && (
+                <form.Field name="worldName">
+                  {(field) => (
+                    <label className="grid gap-1 text-sm">
+                      World
+                      <select
+                        className={selectClass}
+                        value={field.state.value}
+                        onChange={(event) =>
+                          field.handleChange(event.target.value)
+                        }
+                      >
+                        <option value="">Chọn world</option>
+                        {worlds.map((world) => (
+                          <option key={world} value={world}>
+                            {world}
+                          </option>
+                        ))}
                       </select>
                     </label>
                   )}
@@ -431,6 +516,7 @@ export function ContentPage({
                 void search(
                   { ...searched, offset: Math.max(0, searched.offset - 20) },
                   target,
+                  targetWorld,
                 )
               }
             >
@@ -445,6 +531,7 @@ export function ContentPage({
                 void search(
                   { ...searched, offset: searched.offset + 20 },
                   target,
+                  targetWorld,
                 )
               }
             >
@@ -453,6 +540,6 @@ export function ContentPage({
           </div>
         </>
       )}
-    </section>
+    </PageShell>
   );
 }

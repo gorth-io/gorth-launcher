@@ -12,6 +12,8 @@ export const gameApi = {
   versions: (): Promise<GameVersion[]> => ipcRenderer.invoke("game:versions"),
   command: (command: GameCommand): Promise<GameResult> =>
     ipcRenderer.invoke("game:command", command),
+  exportLog: (id: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke("game:export-log", { id }),
   onChanged: (callback: (snapshot: GameSnapshot) => void) => {
     const listener = (
       _event: Electron.IpcRendererEvent,
