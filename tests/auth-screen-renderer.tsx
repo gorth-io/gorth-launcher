@@ -1,5 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { useState } from "react";
+import { RouterProvider } from "@tanstack/react-router";
+import { createLauncherRouter } from "@/lib/navigation";
 import { NavigationBar } from "@/layouts/navigation-bar";
 import { useLauncherNavigation } from "@/hooks/use-launcher-navigation";
 import { AuthScreen } from "@/components/element/auth-screen";
@@ -86,7 +88,10 @@ window.authUiTest = {
   cancelled: 0,
   returned: 0,
   open,
-  showNavigation: () => root.render(<NavigationFixture />),
+  showNavigation: () =>
+    root.render(
+      <RouterProvider router={createLauncherRouter(NavigationFixture)} />,
+    ),
   setLoading: (loading) => {
     state = { ...state, loading };
     for (const listener of listeners) listener(state);

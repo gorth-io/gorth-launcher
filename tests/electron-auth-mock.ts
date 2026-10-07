@@ -8,6 +8,7 @@ export const calls = {
   decrypt: 0,
   available: false,
   snapshots: [] as unknown[],
+  navigationErrors: [] as Error[],
 };
 export const handlers = new Map<string, (...args: unknown[]) => unknown>();
 export const frame = {};
@@ -47,6 +48,8 @@ export class WebContentsView {
     },
     loadURL: async (url: string) => {
       this.url = url;
+      const error = calls.navigationErrors.shift();
+      if (error) throw error;
     },
     reload: () => {},
     setWindowOpenHandler: (

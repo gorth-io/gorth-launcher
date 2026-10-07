@@ -21,17 +21,12 @@ import {
   NativeSelectOption,
 } from "@/components/ui/native-select";
 import type { Instance } from "@/lib/utils/interface";
+import { formatDateTime, formatInstanceFileSize } from "@/lib/utils/formatter";
 import type {
   InstanceDataCommand,
   InstanceDataSnapshot,
 } from "@/lib/instance/interface";
 
-const bytes = (value: number) =>
-  value < 1024
-    ? `${value} B`
-    : value < 1024 ** 2
-      ? `${(value / 1024).toFixed(1)} KB`
-      : `${(value / 1024 ** 2).toFixed(1)} MB`;
 export function InstanceDataPage({
   instances,
   busy,
@@ -209,8 +204,8 @@ export function InstanceDataPage({
                       <div>
                         <p className="font-medium">{world.name}</p>
                         <p className="text-xs text-muted-foreground">
-                          {bytes(world.size)} ·{" "}
-                          {new Date(world.modifiedAt).toLocaleString()}
+                          {formatInstanceFileSize(world.size)} ·{" "}
+                          {formatDateTime(world.modifiedAt)}
                         </p>
                       </div>
                       <div className="flex gap-2">
@@ -257,7 +252,7 @@ export function InstanceDataPage({
                         className="flex items-center justify-between gap-2 text-sm"
                       >
                         <span className="truncate">
-                          {backup.name} · {bytes(backup.size)}
+                          {backup.name} · {formatInstanceFileSize(backup.size)}
                         </span>
                         <div className="flex gap-1">
                           <Button
@@ -397,7 +392,7 @@ export function InstanceDataPage({
                     className="flex items-center justify-between gap-2 rounded-lg border p-2"
                   >
                     <span className="min-w-0 truncate text-sm">
-                      {item.name} · {bytes(item.size)}
+                      {item.name} · {formatInstanceFileSize(item.size)}
                     </span>
                     <div className="flex gap-1">
                       <Button

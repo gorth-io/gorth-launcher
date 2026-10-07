@@ -5,7 +5,7 @@ import { PortalProvider } from "@/providers/portal";
 import { MenuPortal } from "@/providers/menu";
 import { TooltipProvider } from "@/providers/tooltip";
 import { ToasterProvider } from "@/providers/toaster";
-import Application from "@/app";
+import { LauncherRouter } from "@/providers/router";
 import { AuthProvider } from "@/providers/auth";
 import "@/styles/globals.css";
 const root = document.getElementById("root");
@@ -17,7 +17,7 @@ createRoot(root).render(
         <TooltipProvider>
           <ToasterProvider>
             <AuthProvider>
-              <Application />
+              <LauncherRouter />
               <MenuPortal />
             </AuthProvider>
           </ToasterProvider>

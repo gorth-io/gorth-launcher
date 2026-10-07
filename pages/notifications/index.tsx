@@ -8,6 +8,7 @@ import {
   CardContent,
 } from "@/components/ui/card";
 import type { useNotifications } from "@/hooks/use-notifications";
+import { formatDateTime } from "@/lib/utils/formatter";
 
 export function NotificationsPage({
   items,
@@ -60,9 +61,7 @@ export function NotificationsPage({
                 <X />
               </Button>
             </div>
-            <CardDescription>
-              {new Date(item.time).toLocaleString()}
-            </CardDescription>
+            <CardDescription>{formatDateTime(item.time)}</CardDescription>
           </CardHeader>
           <CardContent>
             <p className="text-sm">{item.body}</p>

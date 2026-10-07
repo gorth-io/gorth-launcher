@@ -1,4 +1,5 @@
 import { contextBridge } from "electron";
+import { rpcApi } from "@/preload/api/rpc";
 import { shortcutsApi } from "@/preload/api/shortcuts";
 import { contentApi } from "@/preload/api/content";
 import { libraryApi } from "@/preload/api/database";
@@ -10,6 +11,7 @@ import { windowStateApi, launcherApi } from "@/preload/api/window";
 import { instanceDataApi } from "@/preload/api/instance-data";
 
 const electronAPI = {
+  rpc: rpcApi,
   shortcuts: shortcutsApi,
   content: contentApi,
   library: libraryApi,

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import type { BrowserWindow as ElectronWindow } from "electron";
-import { embeddedViews, handlers } from "./electron-auth-mock";
+import { embeddedViews, handlers, calls } from "./electron-auth-mock";
 
 test("Embedded auth rejects foreign origins/popups, validates bounds, hides callback codes and cleans up", async () => {
   process.env.VITE_SSO_CLIENT_URL = "http://localhost:3000";
@@ -50,6 +50,9 @@ test("Embedded auth rejects foreign origins/popups, validates bounds, hides call
   });
   const controller = new AbortController();
   const callbacks: string[] = [];
+  calls.navigationErrors.push(
+    Object.assign(new Error("ERR_ABORTED"), { errno: -3 }),
+  );
   await openAuthView(
     window,
     "http://localhost:3000/auth/oauth2/authorize?state=PRIVATE-STATE",
@@ -61,6 +64,26 @@ test("Embedded auth rejects foreign origins/popups, validates bounds, hides call
     "register",
   );
   const view = embeddedViews.at(-1)!;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(
+    (handlers.get("auth:view-state")!({}) as { error: string }).error,
+    "",
+  );
+  calls.navigationErrors.push(
+    Object.assign(new Error("ERR_ABORTED"), { errno: -3 }),
+  );
+  view.openHandler!({ url: "http://localhost:3000/auth/sign-in" });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(
+    (handlers.get("auth:view-state")!({}) as { error: string }).error,
+    "",
+  );
+  calls.navigationErrors.push(
+    Object.assign(new Error("ERR_QUIC_PROTOCOL_ERROR"), { errno: -356 }),
+  );
+  view.openHandler!({ url: "http://localhost:3000/auth/sign-in" });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert((handlers.get("auth:view-state")!({}) as { error: string }).error);
   assert.equal(children.length, 1);
   view.webContents.emit(
     "did-navigate",

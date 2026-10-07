@@ -16,6 +16,7 @@ import type {
   ContentVersion,
 } from "@/lib/content/interface";
 import { contentLabels } from "@/lib/content/website";
+import { formatNumber } from "@/lib/utils/formatter";
 import { ProjectWebview } from "./project-webview";
 
 export function ProjectDetail({
@@ -125,7 +126,7 @@ export function ProjectDetail({
             {project.description}
           </p>
           <p className="text-xs text-muted-foreground">
-            {project.downloads.toLocaleString()} lượt tải
+            {formatNumber(project.downloads)} lượt tải
           </p>
         </div>
         <div className="space-y-1 text-sm">

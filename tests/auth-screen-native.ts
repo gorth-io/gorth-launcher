@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { app, BrowserWindow } from "electron";
-import { readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
+import { tmpdir } from "node:os";
+
+app.setPath(
+  "userData",
+  mkdtempSync(path.join(tmpdir(), "gorth-auth-ui-test-")),
+);
 
 app
   .whenReady()
@@ -22,20 +28,13 @@ app
         /^index-.*\.css$/.test(name),
       )!;
       const css = readFileSync(path.join(assets, stylesheet), "utf8");
-      const script = readFileSync(
-        ".vite/auth-screen-renderer.js",
-        "utf8",
-      ).replace(/<\/script/gi, "<\\/script");
+      const script = readFileSync(".vite/auth-screen-renderer.js", "utf8");
       await window.loadURL(
         "data:text/html;charset=utf-8," +
-          encodeURIComponent(
-            "<style>" +
-              css +
-              '</style><div id="root" style="height:100vh"></div><script>' +
-              script +
-              "</script>",
-          ),
+          encodeURIComponent('<div id="root" style="height:100vh"></div>'),
       );
+      await window.webContents.insertCSS(css);
+      await window.webContents.executeJavaScript(script);
       const run = (source: string) =>
         window.webContents.executeJavaScript(source);
       const wait = async (expression: string) => {
@@ -47,7 +46,9 @@ app
       };
       await wait('Boolean(document.querySelector("header input"))');
       assert.equal(
-        await run('document.querySelectorAll("header .lucide-panel-left").length'),
+        await run(
+          'document.querySelectorAll("header .lucide-panel-left").length',
+        ),
         0,
       );
       const dimensions = await run(

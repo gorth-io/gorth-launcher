@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/native-select";
 import { PageShell } from "@/layouts/page-shell";
 import { PageBanner } from "@/components/element/page-banner";
+import { formatDateTime, formatMinutes } from "@/lib/utils/formatter";
 import type { LauncherInfo } from "@/preload/interface";
 import type {
   AccountView,
@@ -197,7 +198,7 @@ export function HomePage({
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
         {[
           ["Total Launches", String(game.history.length)],
-          ["Total Play Time", `${Math.floor(total / 60_000)} phút`],
+          ["Total Play Time", formatMinutes(total)],
           ["Instances", String(instances.length)],
           ["System Memory", info ? `${info.memoryGB} GB` : "—"],
         ].map(([label, value]) => (
@@ -224,8 +225,8 @@ export function HomePage({
                       ?.name ?? session.instanceId}
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    {new Date(session.startedAt).toLocaleString()} ·{" "}
-                    {Math.floor(session.duration / 60_000)} phút
+                    {formatDateTime(session.startedAt)} ·{" "}
+                    {formatMinutes(session.duration)}
                   </p>
                 </div>
               </div>

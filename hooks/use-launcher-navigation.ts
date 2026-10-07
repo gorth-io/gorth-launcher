@@ -1,42 +1,25 @@
-import { useCallback, useState } from "react";
+import { useRouter, useRouterState } from "@tanstack/react-router";
+import { useCallback } from "react";
 import type { Page } from "@/lib/utils/interface";
 
 export function useLauncherNavigation() {
-  const [history, setHistory] = useState<{ pages: Page[]; index: number }>({
-    pages: ["home"],
-    index: 0,
-  });
+  const router = useRouter();
+  const location = useRouterState({ select: (state) => state.location });
+  const page = location.pathname.slice(1) as Page;
+  const index = location.state.__TSR_index ?? 0;
   const navigate = useCallback(
-    (page: Page) =>
-      setHistory((current) => {
-        if (current.pages[current.index] === page) return current;
-        const pages = [...current.pages.slice(0, current.index + 1), page];
-        return { pages, index: pages.length - 1 };
-      }),
-    [],
-  );
-  const back = useCallback(
-    () =>
-      setHistory((current) => ({
-        ...current,
-        index: Math.max(0, current.index - 1),
-      })),
-    [],
-  );
-  const forward = useCallback(
-    () =>
-      setHistory((current) => ({
-        ...current,
-        index: Math.min(current.pages.length - 1, current.index + 1),
-      })),
-    [],
+    (next: Page) => {
+      if (router.state.location.pathname !== "/" + next)
+        void router.navigate({ to: "/" + next });
+    },
+    [router],
   );
   return {
-    page: history.pages[history.index],
+    page,
     navigate,
-    back,
-    forward,
-    canGoBack: history.index > 0,
-    canGoForward: history.index < history.pages.length - 1,
+    back: () => router.history.back(),
+    forward: () => router.history.forward(),
+    canGoBack: index > 0,
+    canGoForward: index < router.history.length - 1,
   };
 }

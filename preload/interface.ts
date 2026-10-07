@@ -5,6 +5,7 @@ export interface LauncherInfo {
   dataPath: string;
 }
 export interface ElectronApi {
+  rpc: typeof import("@/preload/api/rpc").rpcApi;
   shortcuts: typeof import("@/preload/api/shortcuts").shortcutsApi;
   content: typeof import("@/preload/api/content").contentApi;
   library: typeof import("@/preload/api/database").libraryApi;

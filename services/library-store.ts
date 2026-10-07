@@ -19,6 +19,7 @@ import type {
   PlaySession,
 } from "@/lib/utils/interface";
 import { supportedLoader } from "@/lib/game/catalog";
+import { settingsSchema as configuration } from "@/lib/library/settings-schema";
 import {
   defaultInstanceSettings,
   instanceSettingsSchema,
@@ -40,13 +41,6 @@ const instance = z.object({
 });
 const trashEntry = instance.extend({
   deletedAt: z.number().int().nonnegative(),
-});
-const configuration = z.object({
-  showTitlebarLogo: z.boolean().default(true),
-  memory: z.number().int().min(1).max(64),
-  javaPath: z.string().max(4096),
-  trashRetentionDays: z.number().int().min(0).max(365).default(30),
-  keepSavesOnTrashCleanup: z.boolean().default(true),
 });
 const commandSchema = z.discriminatedUnion("action", [
   z
@@ -128,9 +122,7 @@ export async function createLibraryStore(
   isBusy: () => boolean,
 ) {
   await mkdir(dataPath, { recursive: true });
-  const { client, db } = openDatabase(
-    path.join(dataPath, "gorth-launcher.db"),
-  );
+  const { client, db } = openDatabase(path.join(dataPath, "gorth-launcher.db"));
   const root = path.join(dataPath, "minecraft", "instances");
   const trashRoot = path.join(dataPath, "minecraft", ".trash");
   await mkdir(root, { recursive: true });

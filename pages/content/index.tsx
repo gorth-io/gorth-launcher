@@ -12,6 +12,7 @@ import resourceBackground from "@/assets/dawn/background2.png";
 import { ProjectDetail } from "./project-detail";
 import { InstalledContentManager } from "./installed-content";
 import { contentLabels } from "@/lib/content/website";
+import { formatNumber } from "@/lib/utils/formatter";
 import { loaderCatalog, supportedLoader } from "@/lib/game/catalog";
 import type { Instance } from "@/lib/utils/interface";
 import type {
@@ -492,7 +493,7 @@ export function ContentPage({
                   {project.description}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  {project.downloads.toLocaleString()} lượt tải
+                  {formatNumber(project.downloads)} lượt tải
                 </p>
                 <Button
                   className="h-9 self-start"

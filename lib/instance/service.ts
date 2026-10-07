@@ -27,6 +27,7 @@ import { gameIsBusy, synchronizeGameLibrary } from "@/lib/game/service";
 import { contentIsBusy } from "@/lib/content/state";
 import { supportedLoader } from "@/lib/game/catalog";
 import type { Instance } from "@/lib/utils/interface";
+import { formatFilenameTimestamp } from "@/lib/utils/formatter";
 import type {
   InstanceDataCommand,
   InstanceDataResult,
@@ -135,7 +136,6 @@ async function folderSize(root: string): Promise<number> {
   }
   return size;
 }
-const stamp = () => new Date().toISOString().replace(/[:.]/g, "-");
 
 export function registerInstanceDataIpc(
   library: Awaited<ReturnType<typeof createLibraryStore>>,
@@ -336,7 +336,10 @@ export function registerInstanceDataIpc(
           directory = path.join(instanceRoot, "backups", input.world);
         await safeDirectory(source);
         await mkdir(directory, { recursive: true });
-        await zipDirectory(source, path.join(directory, stamp() + ".zip"));
+        await zipDirectory(
+          source,
+          path.join(directory, formatFilenameTimestamp(new Date()) + ".zip"),
+        );
       } else if (input.action === "world.restore") {
         const archive = path.join(
             instanceRoot,
@@ -359,7 +362,7 @@ export function registerInstanceDataIpc(
                 instanceRoot,
                 "backups",
                 input.world,
-                stamp() + "-before-restore.zip",
+                formatFilenameTimestamp(new Date()) + "-before-restore.zip",
               ),
             );
           await rm(target, { recursive: true, force: true });

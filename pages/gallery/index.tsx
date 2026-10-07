@@ -8,6 +8,7 @@ import {
   NativeSelectOption,
 } from "@/components/ui/native-select";
 import { PageBanner } from "@/components/element/page-banner";
+import { formatDateTime } from "@/lib/utils/formatter";
 import type { Instance } from "@/lib/utils/interface";
 import type { InstanceFileEntry } from "@/lib/instance/interface";
 import background from "@/assets/dawn/background2.png";
@@ -53,7 +54,7 @@ function ScreenshotCard({
       <CardContent className="space-y-2 py-3">
         <p className="truncate text-sm font-medium">{shot.name}</p>
         <p className="text-xs text-muted-foreground">
-          {new Date(shot.modifiedAt).toLocaleString()}
+          {formatDateTime(shot.modifiedAt)}
         </p>
         <Button
           className="h-9"

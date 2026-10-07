@@ -15,6 +15,7 @@ import {
 } from "@/lib/auth/service";
 import { registerGameIpc, cancelGame } from "@/lib/game/service";
 import { registerLibraryIpc } from "@/lib/library/service";
+import { registerRpcIpc } from "@/main/ipc/rpc";
 import { registerContentIpc } from "@/lib/content/service";
 import { createWindow } from "@/main/windows/capital";
 import { installApplicationMenu } from "@/main/ipc/application-menu";
@@ -58,6 +59,11 @@ app
   .then(async () => {
     if (!ownsDataDirectory) return;
     const library = await registerLibraryIpc();
+    registerRpcIpc({
+      snapshot: library.snapshot,
+      settings: (settings) =>
+        library.applyCommand({ action: "settings", settings }),
+    });
     await startDesktopServer(
       !!MAIN_WINDOW_VITE_DEV_SERVER_URL,
       path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}`),

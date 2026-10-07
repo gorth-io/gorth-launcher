@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/sidebar";
 import { DashboardMenu, DashboardMenuItem } from "@/components/dashboard/menu";
 import { useDashboardNavigation } from "@/components/dashboard/navigation";
+import { formatInitials } from "@/lib/utils/formatter";
 import type {
   AppSidebarUserProps,
   AuthSidebarProps,
@@ -18,14 +19,7 @@ import type {
 } from "@/components/dashboard/interface";
 
 export function NavAvatar({ user }: { user: UserProps }) {
-  const initials =
-    user.name
-      .trim()
-      .split(/\s+/)
-      .slice(0, 2)
-      .map((part) => part[0])
-      .join("")
-      .toUpperCase() || "G";
+  const initials = formatInitials(user.name);
   return (
     <Avatar>
       <AvatarImage src={user.avatar || undefined} alt={user.name} />

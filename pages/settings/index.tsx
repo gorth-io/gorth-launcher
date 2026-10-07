@@ -2,10 +2,13 @@ import { useState, type Dispatch, type SetStateAction } from "react";
 import { ToastSettings } from "@/components/element/toast-settings";
 import { Box, Check, Folder, Monitor, Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Ranger } from "@/components/custom/ranger";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { type Settings, type PlaySession } from "@/lib/utils/interface";
+import { LaunchHistory } from "./history";
 import { defaultSettings } from "@/lib/utils/launcher";
+import { formatMinutes } from "@/lib/utils/formatter";
 import { saveTheme, type Theme } from "@/lib/theme";
 import type { LauncherInfo } from "@/preload/interface";
 interface SettingsPageProps {
@@ -188,16 +191,16 @@ export function SettingsPage({
               <p>Chừa bộ nhớ cho hệ điều hành và launcher.</p>
             </div>
             <div className="flex items-center gap-4 [&_input]:w-40 [&_input]:accent-primary [&_output]:w-12 [&_output]:text-sm">
-              <Input
+              <Ranger
                 id="memory"
-                type="range"
+                label="Bộ nhớ tối đa"
                 min={1}
                 max={maxMemory}
                 value={Math.min(settings.memory, maxMemory)}
-                onChange={(event) =>
+                onValueChange={(value) =>
                   setSettings({
                     ...settings,
-                    memory: Number(event.target.value),
+                    memory: value,
                   })
                 }
               />
@@ -293,25 +296,12 @@ export function SettingsPage({
             <h2 className="font-semibold">Launch History</h2>
             <p className="text-sm text-muted-foreground">
               {history.length} phiên ·{" "}
-              {Math.floor(
-                history.reduce((sum, item) => sum + item.duration, 0) / 60000,
+              {formatMinutes(
+                history.reduce((sum, item) => sum + item.duration, 0),
               )}{" "}
-              phút chơi
+              chơi
             </p>
-            {[...history]
-              .sort((a, b) => b.startedAt - a.startedAt)
-              .slice(0, 50)
-              .map((item) => (
-                <div key={item.id} className="rounded-md border p-3 text-sm">
-                  <p>{item.instanceId}</p>
-                  <p className="text-muted-foreground">
-                    {new Date(item.startedAt).toLocaleString()} ·{" "}
-                    {Math.floor(item.duration / 60000)} phút ·{" "}
-                    {item.crashed ? "Crash" : "Đã thoát"}
-                  </p>
-                </div>
-              ))}
-            {!history.length && <p className="text-sm">Chưa có phiên chơi.</p>}
+            <LaunchHistory history={history} />
           </section>
         )}
       </div>

@@ -3,6 +3,7 @@ import { ArrowLeft, RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { allowedContentWebsite } from "@/lib/content/website";
+import { isAbortedNavigation } from "@/lib/webview/errors";
 
 export function ProjectWebview({
   url,
@@ -38,9 +39,10 @@ export function ProjectWebview({
         actual.origin !== expected.origin ||
         (actual.pathname !== root && !actual.pathname.startsWith(root + "/"))
       )
-        void element
-          .loadURL(url)
-          .catch(() => setError("Không mở được trang dự án."));
+        void element.loadURL(url).catch((error: unknown) => {
+          if (!isAbortedNavigation(error))
+            setError("Không mở được trang dự án.");
+        });
     };
     const fail = (event: Electron.DidFailLoadEvent) => {
       if (event.isMainFrame && event.errorCode !== -3) {

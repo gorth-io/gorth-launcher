@@ -21,13 +21,13 @@ import { Input } from "@/components/ui/input";
 import type { useGame } from "@/hooks/use-game";
 import { gamePhaseLabels } from "@/lib/utils/constant";
 import type { Instance } from "@/lib/utils/interface";
-import { formatNumber } from "@/lib/utils/formatter";
-
-const duration = (ms: number) => {
-  const minutes = Math.floor(ms / 60_000),
-    hours = Math.floor(minutes / 60);
-  return hours ? `${hours} giờ ${minutes % 60} phút` : `${minutes} phút`;
-};
+import {
+  formatDateTime,
+  formatDuration,
+  formatNumber,
+  formatRemainingTime,
+  formatTransferRate,
+} from "@/lib/utils/formatter";
 export function DownloadsPage({
   game,
   run,
@@ -51,7 +51,7 @@ export function DownloadsPage({
         </p>
         <span className="text-sm">
           {game.activeIds.length} game đang chạy · {game.queue.length} chờ ·{" "}
-          {duration(totalTime)} tổng
+          {formatDuration(totalTime)} tổng
         </span>
         <Button
           variant="outline"
@@ -180,8 +180,10 @@ export function DownloadsPage({
                   />
                   <p className="text-xs text-muted-foreground">
                     {formatNumber(job.completed)} / {formatNumber(job.total)}{" "}
-                    file · {(job.speed / 1024 / 1024).toFixed(2)} MB/s
-                    {job.eta ? ` · còn khoảng ${Math.ceil(job.eta)} giây` : ""}
+                    file · {formatTransferRate(job.speed)}
+                    {job.eta
+                      ? ` · còn khoảng ${formatRemainingTime(job.eta)}`
+                      : ""}
                   </p>
                 </div>
               )}
@@ -225,7 +227,7 @@ export function DownloadsPage({
           <CardHeader>
             <CardTitle>Lịch sử chơi</CardTitle>
             <CardDescription>
-              {game.history.length} phiên · tổng {duration(totalTime)}
+              {game.history.length} phiên · tổng {formatDuration(totalTime)}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
@@ -239,7 +241,7 @@ export function DownloadsPage({
                 >
                   <span>
                     {name(session.instanceId)} ·{" "}
-                    {new Date(session.startedAt).toLocaleString()}
+                    {formatDateTime(session.startedAt)}
                   </span>
                   <span
                     className={
@@ -248,7 +250,7 @@ export function DownloadsPage({
                         : "text-muted-foreground"
                     }
                   >
-                    {duration(session.duration)}
+                    {formatDuration(session.duration)}
                     {session.crashed ? " · crash" : ""}
                   </span>
                 </div>

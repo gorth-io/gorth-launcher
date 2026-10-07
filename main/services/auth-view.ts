@@ -5,6 +5,7 @@ import {
   ssoRedirectUri,
 } from "@/lib/utils/environment";
 import type { AuthViewBounds, AuthViewState } from "@/lib/auth/view-types";
+import { isAbortedNavigation } from "@/lib/webview/errors";
 
 const partition = "persist:gorth-sso";
 interface AuthViewEntry {
@@ -180,7 +181,14 @@ export async function openAuthView(
   // Always deny new windows. Gorth links remain in this same embedded view.
   view.webContents.setWindowOpenHandler(({ url: target }) => {
     if (navigate(target)) {
-      void view.webContents.loadURL(target).catch(() => {
+      void view.webContents.loadURL(target).catch((error: unknown) => {
+        if (
+          isAbortedNavigation(error) ||
+          entries.get(window)?.view !== view ||
+          state.verifying ||
+          controller.signal.aborted
+        )
+          return;
         state.error = "Không tải được trang xác thực.";
         state.loading = false;
         notify();
@@ -213,8 +221,13 @@ export async function openAuthView(
   });
   notify();
   // Loading the SSO UI must not block the main-process authorization promise.
-  void view.webContents.loadURL(url).catch(() => {
-    if (!entries.has(window) || state.verifying || controller.signal.aborted)
+  void view.webContents.loadURL(url).catch((error: unknown) => {
+    if (
+      isAbortedNavigation(error) ||
+      entries.get(window)?.view !== view ||
+      state.verifying ||
+      controller.signal.aborted
+    )
       return;
     state.loading = false;
     state.error = "Không tải được trang SSO. Hãy tải lại hoặc hủy.";
